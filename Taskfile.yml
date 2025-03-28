@@ -1,0 +1,60 @@
+# https://taskfile.dev
+
+version: "3"
+
+tasks:
+  default:
+    cmd: task --list
+    silent: true
+  ci:full:
+    desc: Run CI locally in containers
+    cmd: act
+  ci:local:
+    desc: Run CI locally
+    aliases: [ci]
+    deps: [audit, doc, fmt, test, nix:check, nix:build, clippy, build]
+  nix:check:
+    desc: Run Nix CI checks
+    cmds:
+      - nix flake check
+  nix:build:
+    desc: Run Nix Build
+    cmds:
+      - nix build
+  clippy:
+    desc: Run clippy
+    cmds:
+      - cargo clippy --all-targets --all-features -- -D warnings
+  clippy:fix:
+    desc: Run clippy fixes
+    cmds:
+      - cargo clippy --fix --allow-dirty --all-targets --all-features -- -D warnings
+  fmt:
+    desc: Run all formatters
+    cmds:
+      - cargo fmt --all
+      - alejandra .
+      - prettier --write .
+  test:
+    desc: Run all tests
+    deps: [up]
+    aliases: [t]
+    cmd: cargo nextest run
+  doc:
+    desc: Build the documentation
+    cmd: cargo doc
+  audit:
+    desc: Run cargo security audit
+    cmd: cargo audit
+  build:debug:
+    desc: Build the project
+    aliases: [b, build]
+    cmd: cargo build
+  build:release:
+    desc: Build the project release
+    aliases: [br, release]
+    cmd: cargo build --release
+  coverage:
+    desc: Generate coverage data
+    aliases: [cov]
+    cmd: cargo tarpaulin --skip-clean --include-tests --output-dir coverage --out lcov
