@@ -1,0 +1,10 @@
+[package]
+name = "eideticadb"
+version = "0.1.0"
+edition = "2021"
+authors = ["Patrick Jackson <patrick@jackson.dev>"]
+readme = "README.md"
+license-file = "LICENSE.md"
+description = "Eidetica - Remember everything."
+repository = "https://github.com/arcuru/EideticaDB"
+homepage = "https://eidetica.dev"
