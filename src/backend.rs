@@ -13,6 +13,21 @@ pub struct InMemoryBackend {
     entries: HashMap<String, Entry>,
 }
 
+impl Default for InMemoryBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl InMemoryBackend {
+    /// Create a new in-memory backend
+    pub fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+        }
+    }
+}
+
 impl Backend for InMemoryBackend {
     fn get(&self, id: &str) -> Result<&Entry> {
         self.entries.get(id).ok_or(Error::NotFound)

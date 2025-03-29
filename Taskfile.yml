@@ -37,7 +37,6 @@ tasks:
       - prettier --write .
   test:
     desc: Run all tests
-    deps: [up]
     aliases: [t]
     cmd: cargo nextest run
   doc:

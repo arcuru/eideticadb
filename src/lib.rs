@@ -1,6 +1,6 @@
-mod backend;
-mod basedb;
-mod entry;
+pub mod backend;
+pub mod basedb;
+pub mod entry;
 
 pub type Result<T> = std::result::Result<T, Error>;
 

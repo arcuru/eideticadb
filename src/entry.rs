@@ -91,6 +91,33 @@ impl Entry {
         // Convert to hex string for SRI compatibility
         format!("{:x}", hasher.finalize())
     }
+
+    // Getter methods
+
+    /// Get the root ID of the entry
+    pub fn root(&self) -> &str {
+        &self.root
+    }
+
+    /// Get the operation type of the entry
+    pub fn op(&self) -> &Op {
+        &self.op
+    }
+
+    /// Get the data of the entry
+    pub fn data(&self) -> &HashMap<String, String> {
+        &self.data
+    }
+
+    /// Get the parents of the entry
+    pub fn parents(&self) -> &[String] {
+        &self.parents
+    }
+
+    /// Get the timestamp of the entry
+    pub fn timestamp(&self) -> u64 {
+        self.timestamp
+    }
 }
 
 impl Op {
