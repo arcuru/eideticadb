@@ -1,6 +1,6 @@
 use eideticadb::backend::InMemoryBackend;
 use eideticadb::basedb::BaseDB;
-use eideticadb::entry::Entry;
+use eideticadb::entry::{Entry, CRDT};
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 
@@ -48,8 +48,11 @@ fn main() -> io::Result<()> {
 
                 let name = args[1];
                 let settings = args[2..].join(" ");
+                let mut initial_settings = CRDT::new();
+                initial_settings.insert("settings".to_string(), settings);
+                initial_settings.insert("name".to_string(), name.to_string());
 
-                match db.new_tree(settings) {
+                match db.new_tree(initial_settings) {
                     Ok(tree) => {
                         println!("Created tree '{}' with root ID: {}", name, tree.root_id());
                         trees.insert(name.to_string(), tree);
@@ -143,5 +146,5 @@ fn print_entry(entry: &Entry) {
         println!("    {}: {}", key, value);
     }
     println!("  Parents: {:?}", entry.parents());
-    println!("  Timestamp: {}", entry.timestamp());
+    println!("  Metadata: {:?}", entry.metadata());
 }

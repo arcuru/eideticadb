@@ -1,9 +1,8 @@
 use crate::backend::Backend;
-use crate::entry::{Entry, Op};
+use crate::entry::{Entry, Parents, CRDT, ID};
 use crate::Result;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Database implementation on top of the backend.
 ///
@@ -11,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct BaseDB {
     /// The backend used by the database.
     backend: Arc<Mutex<Box<dyn Backend>>>,
-    // Blob storage will be separate
+    // Blob storage will be separate, maybe even just an extension
     // storage: IPFS;
 }
 
@@ -23,35 +22,26 @@ impl BaseDB {
     }
 
     /// Create a new tree in the database.
-    pub fn new_tree(&self, settings: String) -> Result<Tree> {
+    pub fn new_tree(&self, settings: CRDT) -> Result<Tree> {
         Tree::new(settings, self.backend.clone())
     }
 }
 
 /// Equivalent to a DB table.
 pub struct Tree {
-    root: String,
+    root: ID,
     backend: Arc<Mutex<Box<dyn Backend>>>,
 }
 
 impl Tree {
-    pub fn new(settings: String, backend: Arc<Mutex<Box<dyn Backend>>>) -> Result<Self> {
-        let mut data = HashMap::new();
-        data.insert("settings".to_string(), settings);
-
-        // Get current timestamp
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Time went backwards")
-            .as_secs();
-
+    pub fn new(settings: CRDT, backend: Arc<Mutex<Box<dyn Backend>>>) -> Result<Self> {
         // Create a root entry for this tree
         let entry = Entry::new(
             String::new(), // Empty string for root, as it's the first entry
-            Op::Root,
-            data,
-            vec![], // No parents for root
-            timestamp,
+            "root".to_string(),
+            settings,
+            Parents::new(vec![], vec![]),
+            HashMap::new(),
         );
 
         let root_id = entry.id();
@@ -75,7 +65,7 @@ impl Tree {
     }
 
     /// Get the ID of the root entry
-    pub fn root_id(&self) -> &str {
+    pub fn root_id(&self) -> &ID {
         &self.root
     }
 
