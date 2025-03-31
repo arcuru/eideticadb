@@ -1,5 +1,6 @@
 use eideticadb::backend::InMemoryBackend;
 use eideticadb::basedb::BaseDB;
+use std::collections::HashMap;
 
 #[test]
 fn test_create_basedb() {
@@ -19,7 +20,10 @@ fn test_tree_creation() {
     let db = BaseDB::new(backend);
 
     // Create a new tree with some settings
-    let settings = r#"{"name": "test_tree", "description": "A test tree"}"#.to_string();
+    let mut settings = HashMap::new();
+    settings.insert("name".to_string(), "test_tree".to_string());
+    settings.insert("description".to_string(), "A test tree".to_string());
+
     let tree = db
         .new_tree(settings.clone())
         .expect("Failed to create tree");
@@ -38,7 +42,10 @@ fn test_tree_root_data() {
     let db = BaseDB::new(backend);
 
     // Create a new tree with some settings
-    let settings = r#"{"name": "test_tree", "description": "A test tree"}"#.to_string();
+    let mut settings = HashMap::new();
+    settings.insert("name".to_string(), "test_tree".to_string());
+    settings.insert("description".to_string(), "A test tree".to_string());
+
     let tree = db
         .new_tree(settings.clone())
         .expect("Failed to create tree");
@@ -46,24 +53,23 @@ fn test_tree_root_data() {
     // Retrieve the root entry
     let root_entry = tree.get_root().expect("Failed to get root entry");
 
-    // Verify that the root entry contains the expected settings
-    let data = root_entry.data();
+    // Verify that the root entry has the correct data
     assert_eq!(
-        data.get("settings"),
-        Some(&settings),
+        root_entry.data(),
+        &settings,
         "Root entry should contain the settings"
     );
 
     // Verify that the root entry has the correct Op type
-    use eideticadb::entry::Op;
-    assert!(
-        matches!(root_entry.op(), Op::Root),
-        "Root entry should have Op::Root type"
+    assert_eq!(
+        root_entry.op(),
+        "root",
+        "Root entry should have 'root' operation type"
     );
 
     // Verify that the root entry has no parents
     assert!(
-        root_entry.parents().is_empty(),
+        root_entry.parents().tree().is_empty() && root_entry.parents().subtree().is_empty(),
         "Root entry should have no parents"
     );
 }
@@ -77,8 +83,11 @@ fn test_multiple_trees() {
     let db = BaseDB::new(backend);
 
     // Create multiple trees with different settings
-    let settings1 = r#"{"name": "tree1"}"#.to_string();
-    let settings2 = r#"{"name": "tree2"}"#.to_string();
+    let mut settings1 = HashMap::new();
+    settings1.insert("name".to_string(), "tree1".to_string());
+
+    let mut settings2 = HashMap::new();
+    settings2.insert("name".to_string(), "tree2".to_string());
 
     let tree1 = db
         .new_tree(settings1.clone())
@@ -99,13 +108,13 @@ fn test_multiple_trees() {
     let root2 = tree2.get_root().expect("Failed to get root for tree2");
 
     assert_eq!(
-        root1.data().get("settings"),
-        Some(&settings1),
+        root1.data(),
+        &settings1,
         "Tree1 should have correct settings"
     );
     assert_eq!(
-        root2.data().get("settings"),
-        Some(&settings2),
+        root2.data(),
+        &settings2,
         "Tree2 should have correct settings"
     );
 }
