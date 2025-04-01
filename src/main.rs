@@ -140,11 +140,16 @@ fn print_help() {
 fn print_entry(entry: &Entry) {
     println!("  ID: {}", entry.id());
     println!("  Root: {}", entry.root());
-    println!("  Op: {:?}", entry.op());
-    println!("  Data:");
-    for (key, value) in entry.data() {
-        println!("    {}: {}", key, value);
+    for subtree in entry.subtrees().unwrap() {
+        println!("  Subtree: {}", subtree);
+        println!("    Data:");
+        for (key, value) in entry.data(&subtree).unwrap() {
+            println!("      {}: {}", key, value);
+        }
     }
-    println!("  Parents: {:?}", entry.parents());
-    println!("  Metadata: {:?}", entry.metadata());
+    if let Ok(parents) = entry.parents() {
+        println!("  Parents: {:?}", parents);
+    } else {
+        println!("  Parents: []");
+    }
 }

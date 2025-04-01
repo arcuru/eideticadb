@@ -1,3 +1,5 @@
+use crate::Error;
+use crate::Result;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
@@ -11,24 +13,27 @@ pub type ID = String;
 /// TODO: This data type is not correct.
 pub type CRDT = HashMap<String, String>;
 
+#[derive(Default, Clone, Debug)]
+pub struct TreeNode {
+    pub root: ID,
+    pub parents: Vec<ID>,
+    pub data: CRDT, // Will be metadata applying to the tree. timestamp, height, etc.
+}
+
+#[derive(Default, Clone, Debug)]
+pub struct SubTreeNode {
+    /// Subtrees are _named_, and not identified by an ID.
+    /// They are intended as equivalent to Tables in a relational database.
+    pub name: String,
+    pub parents: Vec<ID>,
+    pub data: CRDT,
+}
+
 /// An entry in the database.
 #[derive(Default, Clone, Debug)]
 pub struct Entry {
-    /// The root ID of the tree containing the entry.
-    /// This is the ID of the entry that is the root of the tree. The most immediate tree.
-    /// IDs are SRI compatible hashes of the entry, including the signature.
-    root: ID,
-    /// The op of the entry.
-    op: String,
-    /// The data of the entry.
-    data: CRDT,
-    /// Parents of the entry within this tree.
-    /// IDs of the entrie(s) that are the direct parents.
-    parents: Parents,
-    /// Metadata about the entry.
-    /// This is for internal EDB use, and is not part of the entry's data.
-    /// Will store things like the timestamp or height of the tree, depending on user settings.
-    metadata: CRDT,
+    pub tree: TreeNode,
+    pub subtrees: Vec<SubTreeNode>,
     // TODO: Security
     // The ID of the key that was used to sign the entry.
     // This is an Entry ID pointing to the entry that allows the key used to sign this.
@@ -61,20 +66,21 @@ impl Parents {
 }
 
 impl Entry {
-    pub fn new(
-        root: ID,
-        op: String,
-        data: HashMap<String, String>,
-        parents: Parents,
-        metadata: HashMap<String, String>,
-    ) -> Self {
-        Self {
-            root,
-            op,
+    /// Create a new entry with a root.
+    pub fn new(root: String, data: CRDT) -> Self {
+        let mut entry = Entry::default();
+        entry.tree.root = root;
+        entry.tree.data = data;
+        entry
+    }
+
+    /// Add a subtree to the entry.
+    pub fn add_subtree(&mut self, name: String, data: CRDT) {
+        self.subtrees.push(SubTreeNode {
+            name,
             data,
-            parents,
-            metadata,
-        }
+            parents: vec![],
+        });
     }
 
     /// Calculate the ID of the entry.
@@ -83,22 +89,36 @@ impl Entry {
     /// TODO: This needs to be formalized, and may change until then
     pub fn id(&self) -> String {
         let mut hasher = Sha256::new();
-        hasher.update(self.root.as_bytes());
-        hasher.update(self.op.as_bytes());
+        hasher.update(self.tree.root.as_bytes());
 
-        // Convert HashMap to a deterministic byte representation
-        let mut data_keys: Vec<&String> = self.data.keys().collect();
-        data_keys.sort(); // Sort for deterministic order
-        for key in data_keys {
+        // Hash the tree data
+        let mut tree_data_keys: Vec<&String> = self.tree.data.keys().collect();
+        tree_data_keys.sort(); // Sort for deterministic order
+        for key in tree_data_keys {
             hasher.update(key.as_bytes());
-            hasher.update(self.data.get(key).unwrap().as_bytes());
+            hasher.update(self.tree.data.get(key).unwrap().as_bytes());
         }
 
-        // Convert Vec<String> to bytes
-        for parent in &self.parents.tree {
-            hasher.update(parent.as_bytes());
+        // Hash all subtrees in a deterministic order
+        for subtree in &self.subtrees {
+            hasher.update(subtree.name.as_bytes());
+
+            // Convert HashMap to a deterministic byte representation
+            let mut data_keys: Vec<&String> = subtree.data.keys().collect();
+            data_keys.sort(); // Sort for deterministic order
+            for key in data_keys {
+                hasher.update(key.as_bytes());
+                hasher.update(subtree.data.get(key).unwrap().as_bytes());
+            }
+
+            // Hash subtree parents
+            for parent in &subtree.parents {
+                hasher.update(parent.as_bytes());
+            }
         }
-        for parent in &self.parents.subtree {
+
+        // Hash tree parents
+        for parent in &self.tree.parents {
             hasher.update(parent.as_bytes());
         }
 
@@ -106,30 +126,84 @@ impl Entry {
         format!("{:x}", hasher.finalize())
     }
 
-    // Getter methods
-
+    /// Get the tree ID of the entry.
+    /// If the entry is a root, return the ID of the entry.
+    /// Otherwise, return the root ID of the tree.
+    pub fn tree(&self) -> ID {
+        if self.is_root() {
+            self.id()
+        } else {
+            self.tree.root.clone()
+        }
+    }
     /// Get the root ID of the entry
     pub fn root(&self) -> &str {
-        &self.root
+        &self.tree.root
     }
 
-    /// Get the operation type of the entry
-    pub fn op(&self) -> &String {
-        &self.op
+    /// Check if the entry is a root
+    pub fn is_root(&self) -> bool {
+        // TODO: Roots are a case that requires special handling.
+        self.subtrees.iter().any(|node| node.name == "root")
     }
 
-    /// Get the data of the entry
-    pub fn data(&self) -> &HashMap<String, String> {
-        &self.data
+    /// Check if the entry is in a subtree
+    pub fn in_subtree(&self, subtree: &str) -> bool {
+        self.subtrees.iter().any(|node| node.name == subtree)
+    }
+
+    /// Get the subtrees of the entry
+    pub fn subtrees(&self) -> Result<Vec<String>> {
+        if self.subtrees.is_empty() {
+            return Err(Error::NotFound);
+        }
+        Ok(self
+            .subtrees
+            .iter()
+            .map(|subtree| subtree.name.clone())
+            .collect())
+    }
+
+    /// Get the data of the subtree
+    pub fn data(&self, subtree: &str) -> Result<&HashMap<String, String>> {
+        self.subtrees
+            .iter()
+            .find(|node| node.name == subtree)
+            .map(|node| &node.data)
+            .ok_or(Error::NotFound)
     }
 
     /// Get the parents of the entry
-    pub fn parents(&self) -> &Parents {
-        &self.parents
+    /// Note: The returned Parents struct should be used for checking containment
+    pub fn parents(&self) -> Result<Vec<ID>> {
+        Ok(self.tree.parents.clone())
     }
 
-    /// Get the timestamp of the entry
-    pub fn metadata(&self) -> &HashMap<String, String> {
-        &self.metadata
+    /// Get the parents of a subtree
+    pub fn subtree_parents(&self, subtree: &str) -> Result<Vec<ID>> {
+        self.subtrees
+            .iter()
+            .find(|node| node.name == subtree)
+            .map(|node| node.parents.clone())
+            .ok_or(Error::NotFound)
+    }
+
+    /// Set the root ID of the entry
+    pub fn set_root(&mut self, root: ID) {
+        self.tree.root = root;
+    }
+
+    /// Set the parents of the entry
+    pub fn set_parents(&mut self, parents: Vec<ID>) {
+        self.tree.parents = parents.clone();
+    }
+
+    /// Set the parents of a subtree
+    pub fn set_subtree_parents(&mut self, subtree: &str, parents: Vec<ID>) {
+        self.subtrees
+            .iter_mut()
+            .find(|node| node.name == subtree)
+            .unwrap()
+            .parents = parents.clone();
     }
 }
