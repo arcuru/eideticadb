@@ -1,7 +1,7 @@
 use crate::backend::Backend;
 use crate::entry::{Entry, CRDT, ID};
 use crate::Result;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 /// Database implementation on top of the backend.
 ///
@@ -20,9 +20,58 @@ impl BaseDB {
         }
     }
 
+    /// Get a reference to the backend
+    pub fn backend(&self) -> &Arc<Mutex<Box<dyn Backend>>> {
+        &self.backend
+    }
+
+    /// Helper function to lock the backend mutex.
+    fn lock_backend(&self) -> Result<MutexGuard<'_, Box<dyn Backend>>> {
+        self.backend.lock().map_err(|_| {
+            crate::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Failed to lock backend",
+            ))
+        })
+    }
+
     /// Create a new tree in the database.
     pub fn new_tree(&self, settings: CRDT) -> Result<Tree> {
         Tree::new(settings, self.backend.clone())
+    }
+
+    /// Load an existing tree from the database by its root ID
+    pub fn load_tree(&self, root_id: &ID) -> Result<Tree> {
+        // First validate the root_id exists in the backend
+        {
+            let backend_guard = self.lock_backend()?;
+            // Make sure the entry exists
+            backend_guard.get(root_id)?;
+        }
+
+        // Create a tree object with the given root_id
+        Ok(Tree {
+            root: root_id.clone(),
+            backend: self.backend.clone(),
+        })
+    }
+
+    /// Load all trees stored in the backend.
+    pub fn all_trees(&self) -> Result<Vec<Tree>> {
+        let root_ids = {
+            let backend_guard = self.lock_backend()?;
+            backend_guard.all_roots()?
+        };
+        let mut trees = Vec::new();
+
+        for root_id in root_ids {
+            trees.push(Tree {
+                root: root_id.clone(),
+                backend: self.backend.clone(),
+            });
+        }
+
+        Ok(trees)
     }
 }
 
@@ -43,19 +92,29 @@ impl Tree {
 
         // Insert the entry into the backend
         {
+            // Lock the backend using the provided Arc<Mutex> directly
             let mut backend_guard = backend.lock().map_err(|_| {
                 crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
-                    "Failed to lock backend",
+                    "Failed to lock backend in Tree::new",
                 ))
             })?;
-
             backend_guard.put(entry)?;
         }
 
         Ok(Self {
             root: root_id,
             backend,
+        })
+    }
+
+    /// Helper function to lock the backend mutex.
+    fn lock_backend(&self) -> Result<MutexGuard<'_, Box<dyn Backend>>> {
+        self.backend.lock().map_err(|_| {
+            crate::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Failed to lock backend",
+            ))
         })
     }
 
@@ -66,14 +125,19 @@ impl Tree {
 
     /// Retrieve the root entry from the backend
     pub fn get_root(&self) -> Result<Entry> {
-        let backend_guard = self.backend.lock().map_err(|_| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Failed to lock backend",
-            ))
-        })?;
-
+        let backend_guard = self.lock_backend()?;
         backend_guard.get(&self.root).cloned()
+    }
+
+    /// Get the name of the tree from its root entry's data
+    pub fn get_name(&self) -> Result<String> {
+        let root_entry = self.get_root()?;
+        root_entry
+            .tree
+            .data
+            .get("name")
+            .cloned()
+            .ok_or(crate::Error::NotFound)
     }
 
     /// Insert an entry into the tree.
@@ -83,12 +147,7 @@ impl Tree {
         entry.set_root(self.root.clone());
         let id: ID;
         {
-            let mut backend_guard = self.backend.lock().map_err(|_| {
-                crate::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "Failed to lock backend",
-                ))
-            })?;
+            let mut backend_guard = self.lock_backend()?;
 
             // Calculate all the tips based on what we know locally
             entry.tree.parents = backend_guard.get_tips(&self.root).unwrap_or_default();
@@ -110,37 +169,19 @@ impl Tree {
     pub fn insert_raw(&self, entry: Entry) -> Result<ID> {
         let id = entry.id();
 
-        let mut backend_guard = self.backend.lock().map_err(|_| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Failed to lock backend",
-            ))
-        })?;
-
+        let mut backend_guard = self.lock_backend()?;
         backend_guard.put(entry)?;
 
         Ok(id)
     }
 
     pub fn get_tips(&self) -> Result<Vec<ID>> {
-        let backend_guard = self.backend.lock().map_err(|_| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Failed to lock backend",
-            ))
-        })?;
-
+        let backend_guard = self.lock_backend()?;
         backend_guard.get_tips(&self.root)
     }
 
     pub fn get_subtree_tips(&self, subtree: &str) -> Result<Vec<ID>> {
-        let backend_guard = self.backend.lock().map_err(|_| {
-            crate::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Failed to lock backend",
-            ))
-        })?;
-
+        let backend_guard = self.lock_backend()?;
         backend_guard.get_subtree_tips(&self.root, subtree)
     }
 }

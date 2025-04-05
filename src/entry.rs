@@ -1,5 +1,6 @@
 use crate::Error;
 use crate::Result;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
@@ -13,14 +14,14 @@ pub type ID = String;
 /// TODO: This data type is not correct.
 pub type CRDT = HashMap<String, String>;
 
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TreeNode {
     pub root: ID,
     pub parents: Vec<ID>,
     pub data: CRDT, // Will be metadata applying to the tree. timestamp, height, etc.
 }
 
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SubTreeNode {
     /// Subtrees are _named_, and not identified by an ID.
     /// They are intended as equivalent to Tables in a relational database.
@@ -30,7 +31,7 @@ pub struct SubTreeNode {
 }
 
 /// An entry in the database.
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Entry {
     pub tree: TreeNode,
     pub subtrees: Vec<SubTreeNode>,
@@ -43,7 +44,7 @@ pub struct Entry {
 }
 
 /// Parents of the entry within this tree.
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Parents {
     /// IDs of the parent in the base tree.
     tree: Vec<ID>,

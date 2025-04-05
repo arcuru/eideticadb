@@ -13,3 +13,14 @@ homepage = "https://eidetica.dev"
 sha2 = "0.10"
 thiserror = "2"
 chrono = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Signal handlng for the binary
+[dependencies.signal-hook]
+version = "0.3"
+optional = true
+
+[[bin]]
+name = "eideticadb"
+required-features = ["signal-hook"]

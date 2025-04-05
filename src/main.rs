@@ -1,25 +1,106 @@
 use eideticadb::backend::InMemoryBackend;
-use eideticadb::basedb::BaseDB;
+use eideticadb::basedb::{BaseDB, Tree};
 use eideticadb::entry::{Entry, CRDT};
+use signal_hook::flag as signal_flag;
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+const DB_FILE: &str = "eidetica.json";
+
+// Helper function to save the database
+fn save_database(db: &BaseDB) {
+    println!("Saving database to {}...", DB_FILE);
+    if let Ok(backend_guard) = db.backend().lock() {
+        let backend_any = backend_guard.as_any();
+        if let Some(in_memory_backend) = backend_any.downcast_ref::<InMemoryBackend>() {
+            match in_memory_backend.save_to_file(DB_FILE) {
+                Ok(_) => println!("Database saved successfully."),
+                Err(e) => println!("Failed to save database: {:?}", e),
+            }
+        } else {
+            println!("Failed to downcast backend to InMemoryBackend for saving.");
+        }
+    } else {
+        println!("Failed to lock backend for saving.");
+    }
+}
 
 fn main() -> io::Result<()> {
+    // Set up signal handling
+    // term_signal is a flag that is set to true when a termination signal is received
+    let term_signal = Arc::new(AtomicBool::new(false));
+    // Register handlers for termination signals
+    // The `register` function handles potential errors internally for common cases
+    // and returns a Result which we ignore here for simplicity in the REPL context.
+    for signal in signal_hook::consts::TERM_SIGNALS {
+        let _ = signal_flag::register(*signal, Arc::clone(&term_signal));
+    }
+
     println!("Welcome to EideticaDB REPL");
+    println!(
+        "Database is automatically loaded from and saved to '{}'",
+        DB_FILE
+    );
     print_help();
 
-    // Create a new in-memory backend
-    let backend = Box::new(InMemoryBackend::new());
+    // Create or load the in-memory backend
+    let backend: Box<dyn eideticadb::backend::Backend> =
+        match InMemoryBackend::load_from_file(DB_FILE) {
+            Ok(backend) => {
+                println!("Loaded database from {}", DB_FILE);
+                Box::new(backend)
+            }
+            Err(e) => {
+                println!("Failed to load database: {:?}. Creating a new one.", e);
+                Box::new(InMemoryBackend::new())
+            }
+        };
+
     let db = BaseDB::new(backend);
 
     // Store trees by name
-    let mut trees = HashMap::new();
+    let mut trees: HashMap<String, Tree> = HashMap::new();
+
+    // Restore trees using the new BaseDB.all_trees method
+    match db.all_trees() {
+        Ok(loaded_trees) => {
+            for tree in loaded_trees {
+                match tree.get_name() {
+                    Ok(name) => {
+                        println!("Restored tree '{}' with root ID: {}", name, tree.root_id());
+                        trees.insert(name.clone(), tree);
+                    }
+                    Err(e) => {
+                        println!(
+                            "Warning: Failed to get name for tree with root {}: {:?}",
+                            tree.root_id(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            println!("Error loading trees from database: {:?}", e);
+        }
+    }
 
     let stdin = io::stdin();
     let mut stdout = io::stdout();
     let mut input = String::new();
+    let mut save_on_exit = true;
 
     loop {
+        // Check if a termination signal has been received
+        if term_signal.load(Ordering::Relaxed) {
+            println!("\nTermination signal received, saving database...");
+            // Ensure save happens, even if user typed 'exit-no-save' before signal
+            save_on_exit = true;
+            break;
+        }
+
         print!("> ");
         stdout.flush()?;
 
@@ -37,8 +118,15 @@ fn main() -> io::Result<()> {
                 print_help();
             }
             "exit" => {
-                println!("Exiting EideticaDB REPL");
                 break;
+            }
+            "exit-no-save" => {
+                save_on_exit = false;
+                println!("Exiting without saving...");
+                break;
+            }
+            "save" => {
+                save_database(&db);
             }
             "create-tree" => {
                 if args.len() < 3 {
@@ -122,19 +210,25 @@ fn main() -> io::Result<()> {
         }
     }
 
+    // Save the database automatically on exit, unless exit-no-save was used
+    if save_on_exit {
+        save_database(&db);
+        println!("Exiting EideticaDB REPL");
+    }
+
     Ok(())
 }
 
 fn print_help() {
     println!("Available commands:");
     println!("  help                  - Show this help message");
-    println!(
-        "  create-tree <name> <settings> - Create a new tree with the given name and settings"
-    );
+    println!("  create-tree <n> <settings> - Create a new tree with the given name and settings");
     println!("  list-trees            - List all created trees");
     println!("  get-root <tree-name>  - Get the root ID of a tree");
     println!("  get-entry <entry-id>  - Get details of an entry by ID");
-    println!("  exit                  - Exit the REPL");
+    println!("  save                  - Save the database to disk");
+    println!("  exit                  - Save database and exit the REPL");
+    println!("  exit-no-save          - Exit the REPL without saving the database");
 }
 
 fn print_entry(entry: &Entry) {
