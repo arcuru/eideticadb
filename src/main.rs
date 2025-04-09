@@ -1,6 +1,7 @@
 use eideticadb::backend::InMemoryBackend;
 use eideticadb::basedb::{BaseDB, Tree};
-use eideticadb::entry::{Entry, CRDT};
+use eideticadb::data::KVOverWrite;
+use eideticadb::entry::Entry;
 use signal_hook::flag as signal_flag;
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
@@ -58,6 +59,7 @@ fn main() -> io::Result<()> {
             }
         };
 
+    // Initialize BaseDB with the loaded or new backend
     let db = BaseDB::new(backend);
 
     // Store trees by name
@@ -135,12 +137,15 @@ fn main() -> io::Result<()> {
                 }
 
                 let name = args[1];
-                let settings = args[2..].join(" ");
-                let mut initial_settings = CRDT::new();
-                initial_settings.insert("settings".to_string(), settings);
-                initial_settings.insert("name".to_string(), name.to_string());
+                let settings_str = args[2..].join(" ");
+                // Create a map for the initial settings and serialize it to JSON
+                let mut settings_map = HashMap::new();
+                settings_map.insert("settings".to_string(), settings_str);
+                settings_map.insert("name".to_string(), name.to_string());
 
-                match db.new_tree(initial_settings) {
+                let settings = KVOverWrite::from_hashmap(settings_map);
+
+                match db.new_tree(settings) {
                     Ok(tree) => {
                         println!("Created tree '{}' with root ID: {}", name, tree.root_id());
                         trees.insert(name.to_string(), tree);
@@ -237,9 +242,7 @@ fn print_entry(entry: &Entry) {
     for subtree in entry.subtrees().unwrap() {
         println!("  Subtree: {}", subtree);
         println!("    Data:");
-        for (key, value) in entry.data(&subtree).unwrap() {
-            println!("      {}: {}", key, value);
-        }
+        println!("      {}", entry.get_settings().unwrap());
     }
     if let Ok(parents) = entry.parents() {
         println!("  Parents: {:?}", parents);

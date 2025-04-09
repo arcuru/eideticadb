@@ -2,23 +2,21 @@ use crate::Error;
 use crate::Result;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
 
 /// An ID in Eidetica is an identifier for an entry or object.
 /// This should be an SRI compatible hash of the entry or object.
 pub type ID = String;
 
-/// A CRDT is a data structure that can be merged with other CRDTs without conflict.
-/// We are using it with the idea that a total ordering of operations result in the same state.
-/// This is a simple key-value store, but could be extended to more complex data structures.
-/// TODO: This data type is not correct.
-pub type CRDT = HashMap<String, String>;
+/// RawData represents serialized data, expected to be JSON.
+/// This type is passed to/from the user, allowing them to manage
+/// the specific data structure and serialization format.
+pub type RawData = String;
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TreeNode {
     pub root: ID,
     pub parents: Vec<ID>,
-    pub data: CRDT, // Will be metadata applying to the tree. timestamp, height, etc.
+    pub data: RawData, // Serialized data (e.g., JSON) for the tree metadata.
 }
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -26,8 +24,8 @@ pub struct SubTreeNode {
     /// Subtrees are _named_, and not identified by an ID.
     /// They are intended as equivalent to Tables in a relational database.
     pub name: String,
-    pub parents: Vec<ID>,
-    pub data: CRDT,
+    pub parents: Vec<ID>, // Parents specific to this entry within this subtree
+    pub data: RawData, // Serialized data (e.g., JSON) specific to this entry within this subtree.
 }
 
 /// An entry in the database.
@@ -68,15 +66,24 @@ impl Parents {
 
 impl Entry {
     /// Create a new entry with a root.
-    pub fn new(root: String, data: CRDT) -> Self {
+    pub fn new(root: String, data: RawData) -> Self {
         let mut entry = Entry::default();
         entry.tree.root = root;
         entry.tree.data = data;
         entry
     }
 
+    pub fn new_top_level(data: RawData) -> Self {
+        let mut entry = Entry::default();
+        entry.tree.root = "".to_string();
+        entry.tree.data = data;
+        // Add a subtree with the name "root" to mark this as a root entry
+        entry.add_subtree("root".to_string(), "{}".to_string());
+        entry
+    }
+
     /// Add a subtree to the entry.
-    pub fn add_subtree(&mut self, name: String, data: CRDT) {
+    pub fn add_subtree(&mut self, name: String, data: RawData) {
         self.subtrees.push(SubTreeNode {
             name,
             data,
@@ -92,34 +99,32 @@ impl Entry {
         let mut hasher = Sha256::new();
         hasher.update(self.tree.root.as_bytes());
 
-        // Hash the tree data
-        let mut tree_data_keys: Vec<&String> = self.tree.data.keys().collect();
-        tree_data_keys.sort(); // Sort for deterministic order
-        for key in tree_data_keys {
-            hasher.update(key.as_bytes());
-            hasher.update(self.tree.data.get(key).unwrap().as_bytes());
-        }
+        // Hash the raw tree data
+        hasher.update(self.tree.data.as_bytes());
 
         // Hash all subtrees in a deterministic order
-        for subtree in &self.subtrees {
+        let mut sorted_subtrees = self.subtrees.clone();
+        sorted_subtrees.sort_by(|a, b| a.name.cmp(&b.name)); // Sort by name
+
+        for subtree in &sorted_subtrees {
+            // Use sorted list
             hasher.update(subtree.name.as_bytes());
+            hasher.update(subtree.data.as_bytes()); // Hash raw data directly
 
-            // Convert HashMap to a deterministic byte representation
-            let mut data_keys: Vec<&String> = subtree.data.keys().collect();
-            data_keys.sort(); // Sort for deterministic order
-            for key in data_keys {
-                hasher.update(key.as_bytes());
-                hasher.update(subtree.data.get(key).unwrap().as_bytes());
-            }
-
-            // Hash subtree parents
-            for parent in &subtree.parents {
+            // Hash subtree parents deterministically
+            let mut sorted_parents = subtree.parents.clone();
+            sorted_parents.sort(); // Sort parent IDs
+            for parent in &sorted_parents {
+                // Use sorted list
                 hasher.update(parent.as_bytes());
             }
         }
 
-        // Hash tree parents
-        for parent in &self.tree.parents {
+        // Hash tree parents deterministically
+        let mut sorted_tree_parents = self.tree.parents.clone();
+        sorted_tree_parents.sort(); // Sort parent IDs
+        for parent in &sorted_tree_parents {
+            // Use sorted list
             hasher.update(parent.as_bytes());
         }
 
@@ -127,16 +132,6 @@ impl Entry {
         format!("{:x}", hasher.finalize())
     }
 
-    /// Get the tree ID of the entry.
-    /// If the entry is a root, return the ID of the entry.
-    /// Otherwise, return the root ID of the tree.
-    pub fn tree(&self) -> ID {
-        if self.is_root() {
-            self.id()
-        } else {
-            self.tree.root.clone()
-        }
-    }
     /// Get the root ID of the entry
     pub fn root(&self) -> &str {
         &self.tree.root
@@ -146,6 +141,10 @@ impl Entry {
     pub fn is_root(&self) -> bool {
         // TODO: Roots are a case that requires special handling.
         self.subtrees.iter().any(|node| node.name == "root")
+    }
+
+    pub fn is_toplevel_root(&self) -> bool {
+        self.root().is_empty() && self.is_root()
     }
 
     /// Check if the entry is in a subtree
@@ -165,8 +164,12 @@ impl Entry {
             .collect())
     }
 
+    pub fn get_settings(&self) -> Result<RawData> {
+        Ok(self.tree.data.clone())
+    }
+
     /// Get the data of the subtree
-    pub fn data(&self, subtree: &str) -> Result<&HashMap<String, String>> {
+    pub fn data(&self, subtree: &str) -> Result<&RawData> {
         self.subtrees
             .iter()
             .find(|node| node.name == subtree)
