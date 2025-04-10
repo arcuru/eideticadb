@@ -1,3 +1,5 @@
+#![recursion_limit = "512"]
+
 pub mod backend;
 pub mod basedb;
 pub mod data;

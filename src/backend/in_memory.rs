@@ -106,6 +106,109 @@ impl InMemoryBackend {
         }
         true
     }
+
+    /// Calculate the height of an entry in the tree or subtree.
+    /// The height is the longest path from the entry to the root.
+    ///
+    /// # Arguments
+    /// * `tree` - The ID of the tree containing the entry
+    /// * `entry_id` - The ID of the entry to calculate height for
+    /// * `parents_map` - A map from entry IDs to their parent IDs
+    /// * `subtree` - The subtree to calculate height for, if None, the height is calculated for the entire tree
+    ///
+    /// Returns the height of the entry.
+    fn calculate_heights(&self, tree: &ID, subtree: Option<&str>) -> Result<HashMap<ID, usize>> {
+        let mut heights: HashMap<ID, usize> = HashMap::new();
+
+        // Collect all entries and their parents into a map
+        let mut parents_map: HashMap<ID, Vec<ID>> = HashMap::new();
+        for (id, entry) in &self.entries {
+            // Check if the entry belongs to the tree or subtree we're interested in
+            let in_tree = match subtree {
+                Some(subtree_name) => entry.in_tree(tree) && entry.in_subtree(subtree_name),
+                None => entry.in_tree(tree),
+            };
+
+            if !in_tree {
+                continue;
+            }
+
+            // Get the appropriate parents based on whether we're in a subtree
+            let parents = match subtree {
+                Some(subtree_name) => entry.subtree_parents(subtree_name)?,
+                None => entry.parents()?,
+            };
+
+            // Store the parents or an empty vector if there was an error
+            parents_map.insert(id.clone(), parents);
+        }
+
+        // Process entries in topological order
+        let mut to_visit: Vec<ID> = Vec::new();
+
+        // Start with the root node
+        if let Some(root_entry) = self.entries.get(tree) {
+            heights.insert(root_entry.id(), 0);
+            to_visit.push(root_entry.id());
+        }
+
+        // Handle entries with no parents (often this is just the root)
+        for (id, parents) in &parents_map {
+            if parents.is_empty() && !heights.contains_key(id) {
+                heights.insert(id.clone(), 0);
+                to_visit.push(id.clone());
+            }
+        }
+
+        // Process the queue
+        while let Some(current_id) = to_visit.pop() {
+            let current_height = *heights.get(&current_id).unwrap_or(&0);
+
+            // Find all entries that have this entry as a parent
+            for (child_id, parents) in &parents_map {
+                if parents.contains(&current_id) {
+                    let child_height = heights.get(child_id).cloned().unwrap_or(0);
+                    let new_height = current_height + 1;
+
+                    if new_height > child_height {
+                        heights.insert(child_id.clone(), new_height);
+                        to_visit.push(child_id.clone());
+                    }
+                }
+            }
+        }
+
+        Ok(heights)
+    }
+
+    /// Sort entries by their height in the tree
+    fn sort_entries_by_height(&self, tree: &ID, entries: &mut [Entry]) -> Result<()> {
+        let heights = self.calculate_heights(tree, None)?;
+
+        entries.sort_by(|a, b| {
+            let a_height = *heights.get(&a.id()).unwrap_or(&0);
+            let b_height = *heights.get(&b.id()).unwrap_or(&0);
+            a_height.cmp(&b_height).then_with(|| a.id().cmp(&b.id()))
+        });
+        Ok(())
+    }
+
+    /// Sort entries by their height in the subtree
+    fn sort_entries_by_subtree_height(
+        &self,
+        tree: &ID,
+        subtree: &str,
+        entries: &mut [Entry],
+    ) -> Result<()> {
+        let heights = self.calculate_heights(tree, Some(subtree))?;
+
+        entries.sort_by(|a, b| {
+            let a_height = *heights.get(&a.id()).unwrap_or(&0);
+            let b_height = *heights.get(&b.id()).unwrap_or(&0);
+            a_height.cmp(&b_height).then_with(|| a.id().cmp(&b.id()))
+        });
+        Ok(())
+    }
 }
 
 impl Backend for InMemoryBackend {
@@ -157,6 +260,35 @@ impl Backend for InMemoryBackend {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
+    fn get_tree(&self, tree: &ID) -> Result<Vec<Entry>> {
+        // Fill this tree vec with all entries in the tree
+        let mut entries = Vec::new();
+        for entry in self.entries.values() {
+            if entry.in_tree(tree) {
+                entries.push(entry.clone());
+            }
+        }
+
+        // Sort entries by tree height
+        self.sort_entries_by_height(tree, &mut entries)?;
+
+        Ok(entries)
+    }
+
+    fn get_subtree(&self, tree: &ID, subtree: &str) -> Result<Vec<Entry>> {
+        let mut entries = Vec::new();
+        for entry in self.entries.values() {
+            if entry.in_tree(tree) && entry.in_subtree(subtree) {
+                entries.push(entry.clone());
+            }
+        }
+
+        // Sort entries by subtree height
+        self.sort_entries_by_subtree_height(tree, subtree, &mut entries)?;
+
+        Ok(entries)
+    }
 }
 
 #[cfg(test)]
@@ -166,6 +298,124 @@ mod tests {
     use crate::Error;
     use std::fs;
     use std::io::Write;
+
+    #[test]
+    fn test_calculate_entry_height() -> Result<()> {
+        let mut backend = InMemoryBackend::new();
+
+        // Create a simple tree:
+        // root -> A -> B -> C\
+        //    \                -> D
+        //     \-> E -> F --->/
+
+        let root = Entry::new_top_level("{}".to_string());
+        let root_id = root.id();
+
+        let mut entry_a = Entry::new(root_id.clone(), "{}".to_string());
+        entry_a.set_parents(vec![root_id.clone()]);
+        let id_a = entry_a.id();
+
+        let mut entry_b = Entry::new(root_id.clone(), "{}".to_string());
+        entry_b.set_parents(vec![id_a.clone()]);
+        let id_b = entry_b.id();
+
+        let mut entry_c = Entry::new(root_id.clone(), "{}".to_string());
+        entry_c.set_parents(vec![id_b.clone()]);
+        let id_c = entry_c.id();
+
+        let mut entry_e = Entry::new(root_id.clone(), "{}".to_string());
+        entry_e.set_parents(vec![root_id.clone()]);
+        let id_e = entry_e.id();
+
+        let mut entry_f = Entry::new(root_id.clone(), "{}".to_string());
+        entry_f.set_parents(vec![id_e.clone()]);
+        let id_f = entry_f.id();
+
+        let mut entry_d = Entry::new(root_id.clone(), "{}".to_string());
+        entry_d.set_parents(vec![id_c.clone(), id_f.clone()]);
+        let id_d = entry_d.id();
+
+        // Insert all entries
+        backend.put(root.clone())?;
+        backend.put(entry_a.clone())?;
+        backend.put(entry_b.clone())?;
+        backend.put(entry_c.clone())?;
+        backend.put(entry_d.clone())?;
+        backend.put(entry_e.clone())?;
+        backend.put(entry_f.clone())?;
+
+        // Calculate heights map
+        let heights = backend.calculate_heights(&root_id, None)?;
+
+        // Root should have height 0
+        assert_eq!(heights.get(&root_id).unwrap_or(&9999), &0);
+
+        // First level entries should have height 1
+        assert_eq!(heights.get(&id_a).unwrap_or(&0), &1);
+        assert_eq!(heights.get(&id_e).unwrap_or(&0), &1);
+
+        // Second level entries should have height 2
+        assert_eq!(heights.get(&id_b).unwrap_or(&0), &2);
+        assert_eq!(heights.get(&id_f).unwrap_or(&0), &2);
+
+        // Third level entries should have height 3
+        assert_eq!(heights.get(&id_c).unwrap_or(&0), &3);
+
+        // D should have a height of **4**, not 3
+        assert_eq!(heights.get(&id_d).unwrap_or(&0), &4);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_sort_entries() -> Result<()> {
+        let mut backend = InMemoryBackend::new();
+
+        // Create a simple tree with mixed order
+        let root = Entry::new_top_level("{}".to_string());
+        let root_id = root.id();
+
+        let mut entry_a = Entry::new(root_id.clone(), "{}".to_string());
+        entry_a.set_parents(vec![root_id.clone()]);
+        let id_a = entry_a.id();
+
+        let mut entry_b = Entry::new(root_id.clone(), "{}".to_string());
+        entry_b.set_parents(vec![id_a.clone()]);
+        let id_b = entry_b.id();
+
+        let mut entry_c = Entry::new(root_id.clone(), "{}".to_string());
+        entry_c.set_parents(vec![id_b.clone()]);
+
+        // Store all entries in backend
+        backend.put(root.clone())?;
+        backend.put(entry_a.clone())?;
+        backend.put(entry_b.clone())?;
+        backend.put(entry_c.clone())?;
+
+        // Create a vector with entries in random order
+        let mut entries = vec![
+            entry_c.clone(),
+            root.clone(),
+            entry_b.clone(),
+            entry_a.clone(),
+        ];
+
+        // Sort the entries
+        backend.sort_entries_by_height(&root_id, &mut entries)?;
+
+        // Check the sorted order: root, A, B, C (by height)
+        assert_eq!(entries[0].id(), root_id);
+        assert_eq!(entries[1].id(), id_a);
+        assert_eq!(entries[2].id(), id_b);
+        assert_eq!(entries[3].id(), entry_c.id());
+
+        // Test with an empty vector (should not panic)
+        let mut empty_entries = Vec::new();
+        backend.sort_entries_by_height(&root_id, &mut empty_entries)?;
+        assert!(empty_entries.is_empty());
+
+        Ok(())
+    }
 
     #[test]
     fn test_save_load_in_memory_backend() -> Result<()> {
@@ -579,6 +829,126 @@ mod tests {
 
         // Clean up
         fs::remove_file(file_path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_tree() -> Result<()> {
+        let mut backend = InMemoryBackend::new();
+
+        // Create two trees (Tree A and Tree B)
+        let root_a = Entry::new_top_level("{\"name\":\"Tree A\"}".to_string());
+        let root_a_id = root_a.id();
+
+        let root_b = Entry::new_top_level("{\"name\":\"Tree B\"}".to_string());
+        let root_b_id = root_b.id();
+
+        // Add entries to Tree A
+        let mut entry_a1 = Entry::new(root_a_id.clone(), "{}".to_string());
+        entry_a1.set_parents(vec![root_a_id.clone()]);
+        let id_a1 = entry_a1.id();
+
+        let mut entry_a2 = Entry::new(root_a_id.clone(), "{}".to_string());
+        entry_a2.set_parents(vec![id_a1.clone()]);
+
+        // Add entries to Tree B
+        let mut entry_b1 = Entry::new(root_b_id.clone(), "{}".to_string());
+        entry_b1.set_parents(vec![root_b_id.clone()]);
+
+        // Insert all entries
+        backend.put(root_a.clone())?;
+        backend.put(entry_a1.clone())?;
+        backend.put(entry_a2.clone())?;
+        backend.put(root_b.clone())?;
+        backend.put(entry_b1.clone())?;
+
+        // Get Tree A and verify its contents
+        let tree_a = backend.get_tree(&root_a_id)?;
+        assert_eq!(tree_a.len(), 3);
+
+        // Verify entries are in height order
+        assert_eq!(tree_a[0].id(), root_a_id);
+        assert_eq!(tree_a[1].id(), id_a1);
+        assert_eq!(tree_a[2].id(), entry_a2.id());
+
+        // Get Tree B and verify its contents
+        let tree_b = backend.get_tree(&root_b_id)?;
+        assert_eq!(tree_b.len(), 2);
+        assert_eq!(tree_b[0].id(), root_b_id);
+        assert_eq!(tree_b[1].id(), entry_b1.id());
+
+        // Get non-existent tree (should return empty vector)
+        let non_existent = backend.get_tree(&"non_existent".to_string())?;
+        assert!(non_existent.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_subtree() -> Result<()> {
+        let mut backend = InMemoryBackend::new();
+
+        // Create a tree with multiple subtrees
+        let root = Entry::new_top_level("{}".to_string());
+        let root_id = root.id();
+
+        // Entry A in subtree "alpha"
+        let mut entry_a = Entry::new(root_id.clone(), "{}".to_string());
+        entry_a.add_subtree("alpha".to_string(), "{\"key\":\"a\"}".to_string());
+        entry_a.set_parents(vec![root_id.clone()]);
+        let id_a = entry_a.id();
+
+        // Entry B in subtree "alpha" (child of A in alpha)
+        let mut entry_b = Entry::new(root_id.clone(), "{}".to_string());
+        entry_b.add_subtree("alpha".to_string(), "{\"key\":\"b\"}".to_string());
+        entry_b.set_parents(vec![id_a.clone()]);
+        entry_b.set_subtree_parents("alpha", vec![id_a.clone()]);
+
+        // Entry C in subtree "beta" only
+        let mut entry_c = Entry::new(root_id.clone(), "{}".to_string());
+        entry_c.add_subtree("beta".to_string(), "{\"key\":\"c\"}".to_string());
+        entry_c.set_parents(vec![entry_b.id().clone()]);
+
+        // Entry D in both subtrees (no parent in alpha)
+        let mut entry_d = Entry::new(root_id.clone(), "{}".to_string());
+        entry_d.add_subtree("alpha".to_string(), "{\"key\":\"d\"}".to_string());
+        entry_d.add_subtree("beta".to_string(), "{\"key\":\"d-beta\"}".to_string());
+        entry_d.set_parents(vec![entry_c.id().clone()]);
+        entry_d.set_subtree_parents("alpha", vec![entry_b.id().clone()]);
+        entry_d.set_subtree_parents("beta", vec![entry_c.id().clone()]);
+
+        // Insert all entries
+        backend.put(root.clone())?;
+        backend.put(entry_a.clone())?;
+        backend.put(entry_b.clone())?;
+        backend.put(entry_c.clone())?;
+        backend.put(entry_d.clone())?;
+
+        // Get alpha subtree
+        let alpha_subtree = backend.get_subtree(&root_id, "alpha")?;
+
+        // Should contain A, B, and D
+        assert_eq!(alpha_subtree.len(), 3);
+
+        // Verify entries are in subtree parent height order
+        let alpha_ids: Vec<ID> = alpha_subtree.iter().map(|e| e.id()).collect();
+        println!("alpha_ids: {:?}", alpha_ids);
+        println!("id_a: {:?}", id_a);
+        println!("entry_b.id(): {:?}", entry_b.id());
+        println!("entry_d.id(): {:?}", entry_d.id());
+        assert_eq!(alpha_ids[0], id_a);
+        assert_eq!(alpha_ids[1], entry_b.id());
+        assert_eq!(alpha_ids[2], entry_d.id());
+
+        // Get beta subtree
+        let beta_subtree = backend.get_subtree(&root_id, "beta")?;
+        assert_eq!(beta_subtree.len(), 2);
+
+        // Should contain C and D
+        let beta_ids: Vec<ID> = beta_subtree.iter().map(|e| e.id()).collect();
+        assert_eq!(beta_ids[0], entry_c.id());
+        assert_eq!(beta_ids[1], entry_d.id());
+
         Ok(())
     }
 }

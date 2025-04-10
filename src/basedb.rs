@@ -1,6 +1,6 @@
 use crate::backend::Backend;
-use crate::data::KVOverWrite;
-use crate::entry::{Entry, RawData, ID};
+use crate::data::{KVOverWrite, CRDT};
+use crate::entry::{Entry, ID};
 use crate::Result;
 use serde_json;
 use std::collections::HashMap;
@@ -197,9 +197,16 @@ impl Tree {
     }
 
     pub fn get_settings(&self) -> Result<KVOverWrite> {
-        // FIXME: This needs to build the data using the CRDT logic
-        let tips = self.get_tip_entries()?;
-        let settings = serde_json::from_str(&tips[0].tree.data)?;
+        let all_entries = {
+            let backend_guard = self.lock_backend()?;
+            backend_guard.get_tree(&self.root)?
+        };
+        let mut settings = KVOverWrite::default();
+        for entry in all_entries {
+            let entry_settings: KVOverWrite = serde_json::from_str(&entry.get_settings()?)?;
+            settings = settings.merge(&entry_settings)?;
+        }
+
         Ok(settings)
     }
 
@@ -218,15 +225,22 @@ impl Tree {
         entries
     }
 
-    pub fn get_subtree_data(&self, subtree: &str) -> Result<RawData> {
-        // FIXME: This needs to build the data using the CRDT logic
-        let backend_guard = self.lock_backend()?;
-        let tips = backend_guard.get_subtree_tips(&self.root, subtree)?;
-        if tips.is_empty() {
-            return Err(crate::Error::NotFound);
+    pub fn get_subtree_data<T>(&self, subtree: &str) -> Result<T>
+    where
+        T: CRDT,
+    {
+        let all_entries = {
+            let backend_guard = self.lock_backend()?;
+            backend_guard.get_subtree(&self.root, subtree)?
+        };
+
+        let mut settings = T::default();
+        for entry in all_entries {
+            let entry_settings: T = serde_json::from_str(entry.data(subtree)?)?;
+            settings = settings.merge(&entry_settings)?;
         }
-        let entry = backend_guard.get(&tips[0])?;
-        Ok(entry.tree.data.clone())
+
+        Ok(settings)
     }
 }
 
@@ -510,5 +524,369 @@ mod tests {
             subtree_tips.contains(&id3),
             "Subtree tips should include entry3"
         );
+    }
+
+    #[test]
+    fn test_get_settings() {
+        // Create a new in-memory backend
+        let backend = Box::new(InMemoryBackend::new());
+
+        // Create a new BaseDB
+        let db = BaseDB::new(backend);
+
+        // Create initial settings
+        let mut initial_settings = HashMap::new();
+        initial_settings.insert("name".to_string(), "test_tree".to_string());
+        initial_settings.insert("version".to_string(), "1.0".to_string());
+        initial_settings.insert("author".to_string(), "original".to_string());
+
+        // Create the tree with initial settings
+        let tree = db
+            .new_tree(KVOverWrite::from_hashmap(initial_settings))
+            .expect("Failed to create tree");
+
+        // Create an update entry with modified settings
+        let mut updated_settings = HashMap::new();
+        updated_settings.insert("version".to_string(), "2.0".to_string()); // Update existing key
+        updated_settings.insert("updated_at".to_string(), "today".to_string()); // Add new key
+
+        // Create and insert the new entry with updated settings
+        let entry = Entry::new(
+            tree.root_id().clone(),
+            serde_json::to_string(&KVOverWrite::from_hashmap(updated_settings)).unwrap(),
+        );
+        tree.insert(entry).expect("Failed to insert entry");
+
+        // Create another update with different settings
+        let mut more_settings = HashMap::new();
+        more_settings.insert("author".to_string(), "new_author".to_string()); // Override existing key
+        more_settings.insert("status".to_string(), "active".to_string()); // Add another key
+
+        let entry2 = Entry::new(
+            tree.root_id().clone(),
+            serde_json::to_string(&KVOverWrite::from_hashmap(more_settings)).unwrap(),
+        );
+        tree.insert(entry2).expect("Failed to insert second entry");
+
+        // Get the merged settings
+        let merged_settings = tree.get_settings().expect("Failed to get settings");
+
+        // Check that all keys are present with the correct, merged values
+        assert_eq!(merged_settings.get("name"), Some(&"test_tree".to_string()));
+        assert_eq!(merged_settings.get("version"), Some(&"2.0".to_string())); // Updated value
+        assert_eq!(
+            merged_settings.get("author"),
+            Some(&"new_author".to_string())
+        ); // Updated value
+        assert_eq!(
+            merged_settings.get("updated_at"),
+            Some(&"today".to_string())
+        ); // New key from first update
+        assert_eq!(merged_settings.get("status"), Some(&"active".to_string())); // New key from second update
+
+        // Make sure we have the right number of keys
+        assert_eq!(merged_settings.as_hashmap().len(), 5);
+    }
+
+    #[test]
+    fn test_get_settings_with_branches() {
+        // Create a new in-memory backend
+        let backend = Box::new(InMemoryBackend::new());
+
+        // Create a new BaseDB
+        let db = BaseDB::new(backend);
+
+        // Create initial settings
+        let mut initial_settings = HashMap::new();
+        initial_settings.insert("name".to_string(), "branched_tree".to_string());
+        initial_settings.insert("version".to_string(), "1.0".to_string());
+
+        // Create the tree with initial settings
+        let tree = db
+            .new_tree(KVOverWrite::from_hashmap(initial_settings))
+            .expect("Failed to create tree");
+
+        // Get the root ID
+        let root_id = tree.root_id().clone();
+
+        // Create first entry (A) with additional settings
+        let mut settings_a = HashMap::new();
+        settings_a.insert("owner".to_string(), "user1".to_string());
+
+        let mut entry_a = Entry::new(
+            root_id.clone(),
+            serde_json::to_string(&KVOverWrite::from_hashmap(settings_a)).unwrap(),
+        );
+        entry_a.set_parents(vec![root_id.clone()]);
+        let id_a = tree.insert_raw(entry_a).expect("Failed to insert entry A");
+
+        // Create two divergent branches from A
+
+        // Branch 1: Entry B changes version and adds description
+        let mut settings_b = HashMap::new();
+        settings_b.insert("version".to_string(), "1.1-beta".to_string());
+        settings_b.insert(
+            "description".to_string(),
+            "Branch 1 description".to_string(),
+        );
+
+        let mut entry_b = Entry::new(
+            root_id.clone(),
+            serde_json::to_string(&KVOverWrite::from_hashmap(settings_b)).unwrap(),
+        );
+        entry_b.set_parents(vec![id_a.clone()]);
+        let _id_b = tree.insert_raw(entry_b).expect("Failed to insert entry B");
+
+        // Branch 2: Entry C changes owner and adds priority
+        let mut settings_c = HashMap::new();
+        settings_c.insert("owner".to_string(), "user2".to_string()); // Will override A's owner
+        settings_c.insert("priority".to_string(), "high".to_string());
+
+        let mut entry_c = Entry::new(
+            root_id.clone(),
+            serde_json::to_string(&KVOverWrite::from_hashmap(settings_c)).unwrap(),
+        );
+        entry_c.set_parents(vec![id_a.clone()]);
+        let _id_c = tree.insert_raw(entry_c).expect("Failed to insert entry C");
+
+        // Get the merged settings
+        let merged_settings = tree.get_settings().expect("Failed to get settings");
+
+        // Check that all keys are present with the expected values
+        assert_eq!(
+            merged_settings.get("name"),
+            Some(&"branched_tree".to_string())
+        ); // From root
+        assert_eq!(
+            merged_settings.get("version"),
+            Some(&"1.1-beta".to_string())
+        ); // From B
+        assert_eq!(merged_settings.get("owner"), Some(&"user2".to_string())); // From C (latest override)
+        assert_eq!(
+            merged_settings.get("description"),
+            Some(&"Branch 1 description".to_string())
+        ); // From B
+        assert_eq!(merged_settings.get("priority"), Some(&"high".to_string())); // From C
+
+        // Make sure we have exactly these 5 keys
+        assert_eq!(merged_settings.as_hashmap().len(), 5);
+    }
+
+    #[test]
+    fn test_get_settings_empty_tree() {
+        // Create a new in-memory backend
+        let backend = Box::new(InMemoryBackend::new());
+
+        // Create a new BaseDB
+        let db = BaseDB::new(backend);
+
+        // Create an empty tree (with empty settings)
+        let tree = db
+            .new_tree(KVOverWrite::new())
+            .expect("Failed to create empty tree");
+
+        // Get the settings from the empty tree
+        let settings = tree
+            .get_settings()
+            .expect("Failed to get settings from empty tree");
+
+        // The settings should be empty (just containing the root entry's empty settings)
+        assert_eq!(settings.as_hashmap().len(), 0, "Settings should be empty");
+
+        // Verify we can still use the settings object normally
+        assert_eq!(settings.get("nonexistent"), None);
+    }
+
+    #[test]
+    fn test_get_subtree_data() {
+        // Create a new in-memory backend
+        let backend = Box::new(InMemoryBackend::new());
+
+        // Create a new BaseDB
+        let db = BaseDB::new(backend);
+
+        // Create initial settings
+        let tree = db
+            .new_tree(KVOverWrite::new())
+            .expect("Failed to create tree");
+
+        // Create first entry with a custom subtree
+        let mut initial_data = HashMap::new();
+        initial_data.insert("key1".to_string(), "value1".to_string());
+        initial_data.insert("key2".to_string(), "value2".to_string());
+
+        let mut entry = Entry::new(tree.root_id().clone(), "{}".to_string());
+        entry.add_subtree(
+            "custom_subtree".to_string(),
+            serde_json::to_string(&KVOverWrite::from_hashmap(initial_data)).unwrap(),
+        );
+
+        let _id1 = tree.insert(entry).expect("Failed to insert first entry");
+
+        // Create second entry with updated data for the custom subtree
+        let mut updated_data = HashMap::new();
+        updated_data.insert("key2".to_string(), "updated2".to_string()); // Override existing
+        updated_data.insert("key3".to_string(), "value3".to_string()); // Add new
+
+        let mut entry2 = Entry::new(tree.root_id().clone(), "{}".to_string());
+        entry2.add_subtree(
+            "custom_subtree".to_string(),
+            serde_json::to_string(&KVOverWrite::from_hashmap(updated_data)).unwrap(),
+        );
+
+        tree.insert(entry2).expect("Failed to insert second entry");
+
+        // Retrieve and test the merged subtree data
+        let subtree_data: KVOverWrite = tree
+            .get_subtree_data("custom_subtree")
+            .expect("Failed to get subtree data");
+
+        // Verify the merged data
+        assert_eq!(subtree_data.get("key1"), Some(&"value1".to_string())); // Unchanged
+        assert_eq!(subtree_data.get("key2"), Some(&"updated2".to_string())); // Updated
+        assert_eq!(subtree_data.get("key3"), Some(&"value3".to_string())); // Added
+        assert_eq!(subtree_data.as_hashmap().len(), 3); // Should have 3 keys
+    }
+
+    #[test]
+    fn test_get_subtree_data_with_branches() {
+        // Create a new in-memory backend
+        let backend = Box::new(InMemoryBackend::new());
+
+        // Create a new BaseDB
+        let db = BaseDB::new(backend);
+
+        // Create a tree
+        let tree = db
+            .new_tree(KVOverWrite::new())
+            .expect("Failed to create tree");
+        let root_id = tree.root_id().clone();
+
+        // Create first entry with a custom subtree
+        let mut initial_data = HashMap::new();
+        initial_data.insert("name".to_string(), "subtree-data".to_string());
+        initial_data.insert("version".to_string(), "1.0".to_string());
+
+        let mut entry1 = Entry::new(root_id.clone(), "{}".to_string());
+        entry1.add_subtree(
+            "data_subtree".to_string(),
+            serde_json::to_string(&KVOverWrite::from_hashmap(initial_data)).unwrap(),
+        );
+
+        let id1 = tree
+            .insert_raw(entry1)
+            .expect("Failed to insert first entry");
+
+        // Create two divergent branches
+
+        // Branch 1: Update version and add description
+        let mut branch1_data = HashMap::new();
+        branch1_data.insert("version".to_string(), "1.1-branch1".to_string());
+        branch1_data.insert("description".to_string(), "From branch 1".to_string());
+
+        let mut entry2 = Entry::new(root_id.clone(), "{}".to_string());
+        entry2.add_subtree(
+            "data_subtree".to_string(),
+            serde_json::to_string(&KVOverWrite::from_hashmap(branch1_data)).unwrap(),
+        );
+        entry2.set_parents(vec![id1.clone()]);
+        entry2.set_subtree_parents("data_subtree", vec![id1.clone()]);
+
+        let _id2 = tree
+            .insert_raw(entry2)
+            .expect("Failed to insert branch 1 entry");
+
+        // Branch 2: Update name and add status
+        let mut branch2_data = HashMap::new();
+        branch2_data.insert("name".to_string(), "subtree-data-renamed".to_string());
+        branch2_data.insert("status".to_string(), "active".to_string());
+
+        let mut entry3 = Entry::new(root_id.clone(), "{}".to_string());
+        entry3.add_subtree(
+            "data_subtree".to_string(),
+            serde_json::to_string(&KVOverWrite::from_hashmap(branch2_data)).unwrap(),
+        );
+        entry3.set_parents(vec![id1.clone()]);
+        entry3.set_subtree_parents("data_subtree", vec![id1.clone()]);
+
+        let _id3 = tree
+            .insert_raw(entry3)
+            .expect("Failed to insert branch 2 entry");
+
+        // Retrieve and test the merged subtree data
+        let subtree_data: KVOverWrite = tree
+            .get_subtree_data("data_subtree")
+            .expect("Failed to get subtree data");
+
+        // Verify the merged data (should contain all keys with latest values)
+        assert_eq!(
+            subtree_data.get("name"),
+            Some(&"subtree-data-renamed".to_string())
+        ); // From branch 2
+        assert_eq!(
+            subtree_data.get("version"),
+            Some(&"1.1-branch1".to_string())
+        ); // From branch 1
+        assert_eq!(
+            subtree_data.get("description"),
+            Some(&"From branch 1".to_string())
+        ); // From branch 1
+        assert_eq!(subtree_data.get("status"), Some(&"active".to_string())); // From branch 2
+
+        // Should have exactly 4 keys
+        assert_eq!(subtree_data.as_hashmap().len(), 4);
+    }
+
+    #[test]
+    fn test_get_subtree_data_empty() {
+        // Create a new in-memory backend
+        let backend = Box::new(InMemoryBackend::new());
+
+        // Create a new BaseDB
+        let db = BaseDB::new(backend);
+
+        // Create a tree
+        let tree = db
+            .new_tree(KVOverWrite::new())
+            .expect("Failed to create tree");
+
+        // Create an entry with an empty subtree
+        let mut entry = Entry::new(tree.root_id().clone(), "{}".to_string());
+        entry.add_subtree(
+            "empty_subtree".to_string(),
+            serde_json::to_string(&KVOverWrite::new()).unwrap(),
+        );
+
+        tree.insert(entry).expect("Failed to insert entry");
+
+        // Retrieve and test the empty subtree data
+        let subtree_data: KVOverWrite = tree
+            .get_subtree_data("empty_subtree")
+            .expect("Failed to get subtree data");
+
+        // Should be empty
+        assert_eq!(subtree_data.as_hashmap().len(), 0);
+    }
+
+    #[test]
+    fn test_get_subtree_data_nonexistent() {
+        // Create a new in-memory backend
+        let backend = Box::new(InMemoryBackend::new());
+
+        // Create a new BaseDB
+        let db = BaseDB::new(backend);
+
+        // Create a tree
+        let tree = db
+            .new_tree(KVOverWrite::new())
+            .expect("Failed to create tree");
+
+        // Try to get data from a nonexistent subtree
+        let result: KVOverWrite = tree
+            .get_subtree_data("nonexistent_subtree")
+            .expect("Should return an empty CRDT for nonexistent subtree");
+
+        // For a nonexistent subtree, we expect an empty CRDT
+        assert_eq!(result.as_hashmap().len(), 0, "Should return an empty CRDT");
     }
 }

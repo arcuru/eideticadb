@@ -24,4 +24,18 @@ pub trait Backend: Send + Sync + Any {
 
     /// Get a reference to self as Any
     fn as_any(&self) -> &dyn Any;
+
+    /// Get the full tree as a list of entries.
+    ///
+    /// Entries are sorted in tree order.
+    /// NB: This returns the full tree including its history, so use with caution.
+    /// FIXME: Confirm this statement. These entries will always be sorted in the returned order,
+    ///        but other entries we're not aware of may be added on future calls.
+    fn get_tree(&self, tree: &ID) -> Result<Vec<Entry>>;
+
+    /// Get the full subtree as a list of entries.
+    ///
+    /// Entries are sorted in tree order.
+    /// NB: This returns the full subtree including its history, so use with caution.
+    fn get_subtree(&self, tree: &ID, subtree: &str) -> Result<Vec<Entry>>;
 }

@@ -152,6 +152,12 @@ impl Entry {
         self.subtrees.iter().any(|node| node.name == subtree)
     }
 
+    /// Check if the entry is in a tree
+    pub fn in_tree(&self, tree: &str) -> bool {
+        // Entries that are roots exist in both trees
+        self.root() == tree || (self.is_root() && (self.id() == tree))
+    }
+
     /// Get the subtrees of the entry
     pub fn subtrees(&self) -> Result<Vec<String>> {
         if self.subtrees.is_empty() {
