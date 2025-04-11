@@ -816,7 +816,7 @@ mod tests {
 
         let loaded_entry2 = loaded_backend.get(&id2)?;
         assert!(
-            loaded_entry2.tree.data == "{}",
+            loaded_entry2.get_settings()? == "{}",
             "Entry 2 tree data should be empty JSON string"
         );
 

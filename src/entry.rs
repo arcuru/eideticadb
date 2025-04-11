@@ -13,14 +13,14 @@ pub type ID = String;
 pub type RawData = String;
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TreeNode {
+struct TreeNode {
     pub root: ID,
     pub parents: Vec<ID>,
     pub data: RawData, // Serialized data (e.g., JSON) for the tree metadata.
 }
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SubTreeNode {
+struct SubTreeNode {
     /// Subtrees are _named_, and not identified by an ID.
     /// They are intended as equivalent to Tables in a relational database.
     pub name: String,
@@ -31,8 +31,8 @@ pub struct SubTreeNode {
 /// An entry in the database.
 #[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Entry {
-    pub tree: TreeNode,
-    pub subtrees: Vec<SubTreeNode>,
+    tree: TreeNode,
+    subtrees: Vec<SubTreeNode>,
     // TODO: Security
     // The ID of the key that was used to sign the entry.
     // This is an Entry ID pointing to the entry that allows the key used to sign this.
@@ -214,6 +214,6 @@ impl Entry {
             .iter_mut()
             .find(|node| node.name == subtree)
             .unwrap()
-            .parents = parents.clone();
+            .parents = parents;
     }
 }

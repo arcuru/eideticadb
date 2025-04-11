@@ -133,7 +133,7 @@ impl Tree {
     /// Get the name of the tree from its root entry's data
     pub fn get_name(&self) -> Result<String> {
         let root_entry = self.get_root()?;
-        let data_map: HashMap<String, String> = serde_json::from_str(&root_entry.tree.data)?;
+        let data_map: HashMap<String, String> = serde_json::from_str(&root_entry.get_settings()?)?;
         data_map.get("name").cloned().ok_or(crate::Error::NotFound)
     }
 
@@ -157,11 +157,13 @@ impl Tree {
             }
 
             // Update subtrees with their tips
-            for subtree in &mut entry.subtrees {
-                let subtree_tips = backend_guard
-                    .get_subtree_tips(&self.root, &subtree.name)
-                    .unwrap_or_default();
-                subtree.parents = subtree_tips;
+            if let Ok(subtrees) = entry.subtrees() {
+                for subtree in &subtrees {
+                    let subtree_tips = backend_guard
+                        .get_subtree_tips(&self.root, subtree)
+                        .unwrap_or_default();
+                    entry.set_subtree_parents(subtree, subtree_tips);
+                }
             }
 
             id = entry.id();
