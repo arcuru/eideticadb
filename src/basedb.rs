@@ -1,3 +1,9 @@
+//!
+//! Provides the main database structures (`BaseDB` and `Tree`).
+//!
+//! `BaseDB` manages multiple `Tree` instances and interacts with the storage `Backend`.
+//! `Tree` represents a single, independent history of data entries, analogous to a table or branch.
+
 use crate::backend::Backend;
 use crate::data::{KVOverWrite, CRDT};
 use crate::entry::{Entry, ID};
@@ -9,6 +15,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 /// Database implementation on top of the backend.
 ///
 /// This database is the base DB, other 'overlays' or 'plugins' should be implemented on top of this.
+/// It manages collections of related entries, called `Tree`s, and interacts with a
+/// pluggable `Backend` for storage and retrieval.
+/// Each `Tree` represents an independent history of data, identified by a root `Entry`.
 pub struct BaseDB {
     /// The backend used by the database.
     backend: Arc<Mutex<Box<dyn Backend>>>,
@@ -39,11 +48,26 @@ impl BaseDB {
     }
 
     /// Create a new tree in the database.
+    ///
+    /// A `Tree` represents a collection of related entries, analogous to a table.
+    /// It is initialized with settings defined by a `KVOverWrite` CRDT.
+    ///
+    /// # Arguments
+    /// * `settings` - The initial settings for the tree, typically including metadata like a name.
+    ///
+    /// # Returns
+    /// A `Result` containing the newly created `Tree` or an error.
     pub fn new_tree(&self, settings: KVOverWrite) -> Result<Tree> {
         Tree::new(settings, Arc::clone(&self.backend))
     }
 
-    /// Load an existing tree from the database by its root ID
+    /// Load an existing tree from the database by its root ID.
+    ///
+    /// # Arguments
+    /// * `root_id` - The content-addressable ID of the root `Entry` of the tree to load.
+    ///
+    /// # Returns
+    /// A `Result` containing the loaded `Tree` or an error if the root ID is not found.
     pub fn load_tree(&self, root_id: &ID) -> Result<Tree> {
         // First validate the root_id exists in the backend
         {
@@ -60,6 +84,12 @@ impl BaseDB {
     }
 
     /// Load all trees stored in the backend.
+    ///
+    /// This retrieves all known root entry IDs from the backend and constructs
+    /// `Tree` instances for each.
+    ///
+    /// # Returns
+    /// A `Result` containing a vector of all `Tree` instances or an error.
     pub fn all_trees(&self) -> Result<Vec<Tree>> {
         let root_ids = {
             let backend_guard = self.lock_backend()?;
@@ -78,13 +108,27 @@ impl BaseDB {
     }
 }
 
-/// Equivalent to a DB table.
+/// Represents a collection of related entries, analogous to a table or a branch in a version control system.
+///
+/// Each `Tree` is identified by the ID of its root `Entry` and manages the history of data
+/// associated with that root. It interacts with the underlying `Backend` for storage.
 pub struct Tree {
     root: ID,
     backend: Arc<Mutex<Box<dyn Backend>>>,
 }
 
 impl Tree {
+    /// Creates a new `Tree` instance.
+    ///
+    /// Initializes the tree by creating a root `Entry` containing the provided settings
+    /// and storing it in the backend.
+    ///
+    /// # Arguments
+    /// * `settings` - A `KVOverWrite` CRDT containing the initial settings for the tree.
+    /// * `backend` - An `Arc<Mutex<>>` protected reference to the backend where the tree's entries will be stored.
+    ///
+    /// # Returns
+    /// A `Result` containing the new `Tree` instance or an error.
     pub fn new(settings: KVOverWrite, backend: Arc<Mutex<Box<dyn Backend>>>) -> Result<Self> {
         // Create a root entry for this tree
         let entry = Entry::new_top_level(serde_json::to_string(&settings)?);
@@ -137,9 +181,21 @@ impl Tree {
         data_map.get("name").cloned().ok_or(crate::Error::NotFound)
     }
 
-    /// Insert an entry into the tree.
-    /// The entry should only include the op and data fields.
-    /// Other fields will be computed on entry.
+    /// Insert an entry into the tree, automatically managing parent references.
+    ///
+    /// This method takes an `Entry`, sets its root ID to this tree's root,
+    /// determines the current tips (leaf entries) of the main tree and relevant subtrees
+    /// using the backend, sets these tips as the parents of the new entry, calculates the entry's ID,
+    /// and stores it in the backend.
+    ///
+    /// The provided entry should primarily contain the user data in its `tree.data` and `subtrees` fields.
+    /// The `root`, `parents`, and `subtree_parents` fields will be overwritten.
+    ///
+    /// # Arguments
+    /// * `entry` - The `Entry` to insert, containing the data to be added.
+    ///
+    /// # Returns
+    /// A `Result` containing the content-addressable ID of the newly inserted `Entry` or an error.
     pub fn insert(&self, mut entry: Entry) -> Result<ID> {
         entry.set_root(self.root.clone());
         let id: ID;
@@ -183,11 +239,21 @@ impl Tree {
         Ok(id)
     }
 
+    /// Get the current tips (leaf entries) of the main tree branch.
+    ///
+    /// Tips represent the latest entries in the tree's main history, forming the heads of the DAG.
+    ///
+    /// # Returns
+    /// A `Result` containing a vector of `ID`s for the tip entries or an error.
     pub fn get_tips(&self) -> Result<Vec<ID>> {
         let backend_guard = self.lock_backend()?;
         backend_guard.get_tips(&self.root)
     }
 
+    /// Get the full `Entry` objects for the current tips of the main tree branch.
+    ///
+    /// # Returns
+    /// A `Result` containing a vector of the tip `Entry` objects or an error.
     pub fn get_tip_entries(&self) -> Result<Vec<Entry>> {
         let backend_guard = self.lock_backend()?;
         let tips = backend_guard.get_tips(&self.root)?;
@@ -198,6 +264,14 @@ impl Tree {
         entries
     }
 
+    /// Get the merged settings for the tree.
+    ///
+    /// This retrieves all entries in the main tree history from the backend,
+    /// deserializes the settings data from each entry's `tree.data` field into a `KVOverWrite` CRDT,
+    /// and merges them according to CRDT rules to produce the final, consolidated settings.
+    ///
+    /// # Returns
+    /// A `Result` containing the merged `KVOverWrite` settings or an error.
     pub fn get_settings(&self) -> Result<KVOverWrite> {
         let all_entries = {
             let backend_guard = self.lock_backend()?;
@@ -212,11 +286,27 @@ impl Tree {
         Ok(settings)
     }
 
+    /// Get the current tips (leaf entries) for a specific subtree within this tree.
+    ///
+    /// Subtrees represent separate, named histories within the main tree.
+    ///
+    /// # Arguments
+    /// * `subtree` - The name of the subtree.
+    ///
+    /// # Returns
+    /// A `Result` containing a vector of `ID`s for the tip entries of the specified subtree or an error.
     pub fn get_subtree_tips(&self, subtree: &str) -> Result<Vec<ID>> {
         let backend_guard = self.lock_backend()?;
         backend_guard.get_subtree_tips(&self.root, subtree)
     }
 
+    /// Get the full `Entry` objects for the current tips of a specific subtree.
+    ///
+    /// # Arguments
+    /// * `subtree` - The name of the subtree.
+    ///
+    /// # Returns
+    /// A `Result` containing a vector of the tip `Entry` objects for the specified subtree or an error.
     pub fn get_subtree_tip_entries(&self, subtree: &str) -> Result<Vec<Entry>> {
         let backend_guard = self.lock_backend()?;
         let tips = backend_guard.get_subtree_tips(&self.root, subtree)?;
@@ -227,6 +317,21 @@ impl Tree {
         entries
     }
 
+    /// Get the merged data for a specific subtree, interpreted as a specific CRDT type.
+    ///
+    /// This retrieves all entries belonging to the specified subtree history from the backend,
+    /// deserializes the data from each entry's corresponding `SubTreeNode` into the specified CRDT type `T`,
+    /// and merges them according to the `CRDT` trait implementation for `T` to produce the final,
+    /// consolidated data state for the subtree.
+    ///
+    /// # Type Parameters
+    /// * `T` - The CRDT type to deserialize and merge the subtree data into. Must implement `CRDT` and `Default`.
+    ///
+    /// # Arguments
+    /// * `subtree` - The name of the subtree.
+    ///
+    /// # Returns
+    /// A `Result` containing the merged data of type `T` or an error.
     pub fn get_subtree_data<T>(&self, subtree: &str) -> Result<T>
     where
         T: CRDT,

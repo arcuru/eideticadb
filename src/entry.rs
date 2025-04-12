@@ -1,37 +1,58 @@
+//!
+//! Defines the fundamental data unit (`Entry`) and related types.
+//!
+//! An `Entry` is the core, content-addressable building block of the database,
+//! representing a snapshot of data in the main tree and potentially multiple named subtrees.
+//! This module also defines the `ID` type and `RawData` type.
+
 use crate::Error;
 use crate::Result;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// An ID in Eidetica is an identifier for an entry or object.
-/// This should be an SRI compatible hash of the entry or object.
+/// A content-addressable identifier for an `Entry` or other database object.
+///
+/// Currently represented as a hex-encoded SHA-256 hash string.
 pub type ID = String;
 
-/// RawData represents serialized data, expected to be JSON.
-/// This type is passed to/from the user, allowing them to manage
-/// the specific data structure and serialization format.
+/// Represents serialized data, typically JSON, provided by the user.
+///
+/// This allows users to manage their own data structures and serialization formats.
 pub type RawData = String;
 
+/// Internal representation of the main tree node within an `Entry`.
 #[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct TreeNode {
+    /// The ID of the root `Entry` of the tree this node belongs to.
     pub root: ID,
+    /// IDs of the parent `Entry`s in the main tree history.
     pub parents: Vec<ID>,
-    pub data: RawData, // Serialized data (e.g., JSON) for the tree metadata.
+    /// Serialized data associated with this `Entry` in the main tree.
+    pub data: RawData,
 }
 
+/// Internal representation of a named subtree node within an `Entry`.
 #[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct SubTreeNode {
+    /// The name of the subtree, analogous to a table name.
     /// Subtrees are _named_, and not identified by an ID.
-    /// They are intended as equivalent to Tables in a relational database.
     pub name: String,
+    /// IDs of the parent `Entry`s specific to this subtree's history.
     pub parents: Vec<ID>, // Parents specific to this entry within this subtree
-    pub data: RawData, // Serialized data (e.g., JSON) specific to this entry within this subtree.
+    /// Serialized data specific to this `Entry` within this named subtree.
+    pub data: RawData,
 }
 
-/// An entry in the database.
+/// The fundamental unit of data in EideticaDB.
+///
+/// An `Entry` represents a snapshot of data within a `Tree` and potentially one or more named `SubTree`s.
+/// It is content-addressable, meaning its `ID` is a cryptographic hash of its contents.
+/// Entries form a Merkle-DAG (Directed Acyclic Graph) structure through parent references.
 #[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Entry {
+    /// The main tree node data, including the root ID, parents in the main tree, and associated data.
     tree: TreeNode,
+    /// A collection of named subtrees this entry contains data for.
     subtrees: Vec<SubTreeNode>,
     // TODO: Security
     // The ID of the key that was used to sign the entry.
@@ -41,31 +62,12 @@ pub struct Entry {
     // signature: String,
 }
 
-/// Parents of the entry within this tree.
-#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Parents {
-    /// IDs of the parent in the base tree.
-    tree: Vec<ID>,
-    /// IDs of the parents in the embedded subtree.
-    subtree: Vec<ID>,
-}
-
-impl Parents {
-    pub fn new(tree: Vec<ID>, subtree: Vec<ID>) -> Self {
-        Self { tree, subtree }
-    }
-
-    pub fn tree(&self) -> &Vec<ID> {
-        &self.tree
-    }
-
-    pub fn subtree(&self) -> &Vec<ID> {
-        &self.subtree
-    }
-}
-
 impl Entry {
-    /// Create a new entry with a root.
+    /// Create a new entry associated with a specific tree root.
+    ///
+    /// # Arguments
+    /// * `root` - The `ID` of the root `Entry` of the tree this entry belongs to.
+    /// * `data` - `RawData` (serialized string) for the main tree node (`tree.data`).
     pub fn new(root: String, data: RawData) -> Self {
         let mut entry = Entry::default();
         entry.tree.root = root;
@@ -73,6 +75,12 @@ impl Entry {
         entry
     }
 
+    /// Creates a new top-level (root) entry for a new tree.
+    ///
+    /// Root entries have an empty string as their `root` ID and include a special "root" subtree marker.
+    ///
+    /// # Arguments
+    /// * `data` - `RawData` (serialized string) for the root entry's main data (`tree.data`), often tree settings.
     pub fn new_top_level(data: RawData) -> Self {
         let mut entry = Entry::default();
         entry.tree.root = "".to_string();
@@ -82,7 +90,13 @@ impl Entry {
         entry
     }
 
-    /// Add a subtree to the entry.
+    /// Add data for a named subtree to this entry.
+    ///
+    /// If an entry contributes data to a specific domain or table, it's added via a `SubTreeNode`.
+    ///
+    /// # Arguments
+    /// * `name` - The name of the subtree (e.g., "users", "products").
+    /// * `data` - `RawData` (serialized string) specific to this entry for the named subtree.
     pub fn add_subtree(&mut self, name: String, data: RawData) {
         self.subtrees.push(SubTreeNode {
             name,
@@ -91,10 +105,13 @@ impl Entry {
         });
     }
 
-    /// Calculate the ID of the entry.
-    /// This is the SRI compatible hash of the entry.
+    /// Calculate the content-addressable ID (SHA-256 hash) of the entry.
     ///
-    /// TODO: This needs to be formalized, and may change until then
+    /// The hash includes the root ID, main tree data, and data from all subtrees,
+    /// ensuring that any change to the entry results in a different ID.
+    /// Subtrees and parents are sorted before hashing for determinism.
+    ///
+    /// TODO: Formalize the hashing scheme for SRI compatibility.
     pub fn id(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(self.tree.root.as_bytes());
@@ -132,33 +149,36 @@ impl Entry {
         format!("{:x}", hasher.finalize())
     }
 
-    /// Get the root ID of the entry
+    /// Get the ID of the root `Entry` of the tree this entry belongs to.
     pub fn root(&self) -> &str {
         &self.tree.root
     }
 
-    /// Check if the entry is a root
+    /// Check if this entry is a root entry of a tree.
+    ///
+    /// Determined by the presence of a special "root" subtree.
     pub fn is_root(&self) -> bool {
         // TODO: Roots are a case that requires special handling.
         self.subtrees.iter().any(|node| node.name == "root")
     }
 
+    /// Check if this entry is the absolute top-level root entry (has no parent tree).
     pub fn is_toplevel_root(&self) -> bool {
         self.root().is_empty() && self.is_root()
     }
 
-    /// Check if the entry is in a subtree
+    /// Check if this entry contains data for a specific named subtree.
     pub fn in_subtree(&self, subtree: &str) -> bool {
         self.subtrees.iter().any(|node| node.name == subtree)
     }
 
-    /// Check if the entry is in a tree
+    /// Check if this entry belongs to a specific tree, identified by its root ID.
     pub fn in_tree(&self, tree: &str) -> bool {
         // Entries that are roots exist in both trees
         self.root() == tree || (self.is_root() && (self.id() == tree))
     }
 
-    /// Get the subtrees of the entry
+    /// Get the names of all subtrees this entry contains data for.
     pub fn subtrees(&self) -> Result<Vec<String>> {
         if self.subtrees.is_empty() {
             return Err(Error::NotFound);
@@ -170,11 +190,13 @@ impl Entry {
             .collect())
     }
 
+    /// Get the `RawData` associated with the main tree node (`tree.data`).
+    /// Often used for tree settings or metadata.
     pub fn get_settings(&self) -> Result<RawData> {
         Ok(self.tree.data.clone())
     }
 
-    /// Get the data of the subtree
+    /// Get the `RawData` for a specific named subtree within this entry.
     pub fn data(&self, subtree: &str) -> Result<&RawData> {
         self.subtrees
             .iter()
@@ -183,13 +205,13 @@ impl Entry {
             .ok_or(Error::NotFound)
     }
 
-    /// Get the parents of the entry
+    /// Get the IDs of the parent entries in the main tree history.
     /// Note: The returned Parents struct should be used for checking containment
     pub fn parents(&self) -> Result<Vec<ID>> {
         Ok(self.tree.parents.clone())
     }
 
-    /// Get the parents of a subtree
+    /// Get the IDs of the parent entries specific to a named subtree's history.
     pub fn subtree_parents(&self, subtree: &str) -> Result<Vec<ID>> {
         self.subtrees
             .iter()
@@ -198,17 +220,20 @@ impl Entry {
             .ok_or(Error::NotFound)
     }
 
-    /// Set the root ID of the entry
+    /// Set the root ID for this entry.
+    /// Typically used internally by `Tree::insert`.
     pub fn set_root(&mut self, root: ID) {
         self.tree.root = root;
     }
 
-    /// Set the parents of the entry
+    /// Set the parent IDs for the main tree history.
+    /// Typically used internally by `Tree::insert`.
     pub fn set_parents(&mut self, parents: Vec<ID>) {
         self.tree.parents = parents.clone();
     }
 
-    /// Set the parents of a subtree
+    /// Set the parent IDs for a specific named subtree's history.
+    /// Typically used internally by `Tree::insert`.
     pub fn set_subtree_parents(&mut self, subtree: &str, parents: Vec<ID>) {
         self.subtrees
             .iter_mut()

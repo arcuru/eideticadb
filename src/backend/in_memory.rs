@@ -8,7 +8,14 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-/// In-memory backend for testing and development.
+/// A simple in-memory backend implementation using a `HashMap` for storage.
+///
+/// This backend is suitable for testing, development, or scenarios where
+/// data persistence is not strictly required or is handled externally
+/// (e.g., by saving/loading the entire state to/from a file).
+///
+/// It provides basic persistence capabilities via `save_to_file` and
+/// `load_from_file`, serializing the `HashMap` to JSON.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct InMemoryBackend {
     entries: HashMap<ID, Entry>,
@@ -21,14 +28,20 @@ impl Default for InMemoryBackend {
 }
 
 impl InMemoryBackend {
-    /// Create a new in-memory backend
+    /// Creates a new, empty `InMemoryBackend`.
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
         }
     }
 
-    /// Save the backend state to a JSON file
+    /// Saves the entire backend state (all entries) to a specified file as JSON.
+    ///
+    /// # Arguments
+    /// * `path` - The path to the file where the state should be saved.
+    ///
+    /// # Returns
+    /// A `Result` indicating success or an I/O or serialization error.
     pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let json = serde_json::to_string(self).map_err(|e| {
             Error::Io(std::io::Error::new(
@@ -41,7 +54,15 @@ impl InMemoryBackend {
         Ok(())
     }
 
-    /// Load the backend state from a JSON file
+    /// Loads the backend state from a specified JSON file.
+    ///
+    /// If the file does not exist, a new, empty `InMemoryBackend` is returned.
+    ///
+    /// # Arguments
+    /// * `path` - The path to the file from which to load the state.
+    ///
+    /// # Returns
+    /// A `Result` containing the loaded `InMemoryBackend` or an I/O or deserialization error.
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let file_exists = path.as_ref().exists();
         if !file_exists {
@@ -57,18 +78,14 @@ impl InMemoryBackend {
         })
     }
 
-    /// Get all entry IDs in the backend
+    /// Returns a vector containing the IDs of all entries currently stored in the backend.
     pub fn all_ids(&self) -> Vec<ID> {
         self.entries.keys().cloned().collect()
     }
 
-    /// Get an entry by ID directly from the backend
-    pub fn get_entry(&self, id: &ID) -> Result<&Entry> {
-        self.get(id)
-    }
-
-    /// Check if an entry is a tip.
-    /// An entry is a tip if it has no children.
+    /// Helper function to check if an entry is a tip within its tree.
+    ///
+    /// An entry is a tip if no other entry in the same tree lists it as a parent.
     fn is_tip(&self, tree: &ID, entry_id: &ID) -> bool {
         // Check if any other entry has this entry as its parent
         for other_entry in self.entries.values() {
@@ -81,8 +98,10 @@ impl InMemoryBackend {
         true
     }
 
-    /// Check if an entry is a subtree tip.
-    /// An entry is a subtree tip if it has no children in the given subtree.
+    /// Helper function to check if an entry is a tip within a specific subtree.
+    ///
+    /// An entry is a subtree tip if it belongs to the subtree and no other entry
+    /// *within the same subtree* lists it as a parent for that subtree.
     fn is_subtree_tip(&self, tree: &ID, subtree: &str, entry_id: &ID) -> bool {
         // First, check if the entry is in the subtree
         let entry = match self.entries.get(entry_id) {
@@ -107,16 +126,19 @@ impl InMemoryBackend {
         true
     }
 
-    /// Calculate the height of an entry in the tree or subtree.
-    /// The height is the longest path from the entry to the root.
+    /// Calculates the height of each entry within a specified tree or subtree.
+    ///
+    /// Height is defined as the length of the longest path from the tree/subtree root
+    /// to the entry. Entries with no parents (or the root itself) have height 0.
+    /// This is used for topological sorting.
     ///
     /// # Arguments
-    /// * `tree` - The ID of the tree containing the entry
-    /// * `entry_id` - The ID of the entry to calculate height for
-    /// * `parents_map` - A map from entry IDs to their parent IDs
-    /// * `subtree` - The subtree to calculate height for, if None, the height is calculated for the entire tree
+    /// * `tree` - The ID of the tree context.
+    /// * `subtree` - An optional subtree name. If `Some`, calculates heights within
+    ///               that specific subtree. If `None`, calculates heights within the main tree.
     ///
-    /// Returns the height of the entry.
+    /// # Returns
+    /// A `Result` containing a `HashMap` mapping entry IDs to their calculated height, or an error.
     fn calculate_heights(&self, tree: &ID, subtree: Option<&str>) -> Result<HashMap<ID, usize>> {
         let mut heights: HashMap<ID, usize> = HashMap::new();
 
@@ -181,7 +203,10 @@ impl InMemoryBackend {
         Ok(heights)
     }
 
-    /// Sort entries by their height in the tree
+    /// Sorts a slice of entries topologically based on their height within the main tree.
+    ///
+    /// Uses `calculate_heights` internally. Sorts primarily by height (ascending)
+    /// and secondarily by ID (lexicographically) for tie-breaking.
     fn sort_entries_by_height(&self, tree: &ID, entries: &mut [Entry]) -> Result<()> {
         let heights = self.calculate_heights(tree, None)?;
 
@@ -193,7 +218,10 @@ impl InMemoryBackend {
         Ok(())
     }
 
-    /// Sort entries by their height in the subtree
+    /// Sorts a slice of entries topologically based on their height within a specific subtree.
+    ///
+    /// Uses `calculate_heights` internally. Sorts primarily by height (ascending)
+    /// within the subtree and secondarily by ID (lexicographically).
     fn sort_entries_by_subtree_height(
         &self,
         tree: &ID,
@@ -212,15 +240,19 @@ impl InMemoryBackend {
 }
 
 impl Backend for InMemoryBackend {
+    /// Retrieves an entry by ID from the internal `HashMap`.
     fn get(&self, id: &ID) -> Result<&Entry> {
         self.entries.get(id).ok_or(Error::NotFound)
     }
 
+    /// Inserts or updates an entry in the internal `HashMap`.
     fn put(&mut self, entry: Entry) -> Result<()> {
         self.entries.insert(entry.id(), entry);
         Ok(())
     }
 
+    /// Finds the tip entries for the specified tree.
+    /// Iterates through all entries, checking if they belong to the tree and if `is_tip` returns true.
     fn get_tips(&self, tree: &ID) -> Result<Vec<ID>> {
         let mut tips = Vec::new();
         for (id, entry) in &self.entries {
@@ -234,6 +266,8 @@ impl Backend for InMemoryBackend {
         Ok(tips)
     }
 
+    /// Finds the tip entries for the specified subtree.
+    /// Iterates through all entries, checking if they belong to the subtree and if `is_subtree_tip` returns true.
     fn get_subtree_tips(&self, tree: &ID, subtree: &str) -> Result<Vec<ID>> {
         let mut tips = Vec::new();
         for (id, entry) in &self.entries {
@@ -247,6 +281,7 @@ impl Backend for InMemoryBackend {
         Ok(tips)
     }
 
+    /// Finds all entries that are top-level roots (i.e., `entry.is_toplevel_root()` is true).
     fn all_roots(&self) -> Result<Vec<ID>> {
         let mut roots = Vec::new();
         for (id, entry) in &self.entries {
@@ -257,10 +292,13 @@ impl Backend for InMemoryBackend {
         Ok(roots)
     }
 
+    /// Returns `self` as a `&dyn Any` reference.
     fn as_any(&self) -> &dyn Any {
         self
     }
 
+    /// Retrieves all entries belonging to the specified tree, sorted topologically.
+    /// Collects relevant entries and then uses `sort_entries_by_height`.
     fn get_tree(&self, tree: &ID) -> Result<Vec<Entry>> {
         // Fill this tree vec with all entries in the tree
         let mut entries = Vec::new();
@@ -276,6 +314,8 @@ impl Backend for InMemoryBackend {
         Ok(entries)
     }
 
+    /// Retrieves all entries belonging to the specified subtree, sorted topologically.
+    /// Collects relevant entries and then uses `sort_entries_by_subtree_height`.
     fn get_subtree(&self, tree: &ID, subtree: &str) -> Result<Vec<Entry>> {
         let mut entries = Vec::new();
         for entry in self.entries.values() {

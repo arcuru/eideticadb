@@ -2,16 +2,19 @@ use crate::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// A trait for data that can be serialized to and from a RawData.
+/// Marker trait for data types that can be stored in EideticaDB.
 ///
-/// Users can implement this for any type they wish to store in the tree.
+/// Requires `Serialize` and `Deserialize` for conversion to/from [`RawData`](crate::entry::RawData).
+/// Users can implement this for any type they wish to store, typically alongside `serde::Serialize` and `serde::Deserialize`.
 pub trait Data: Serialize + for<'de> Deserialize<'de> {}
 
-/// A trait for data that can be merged with another instance of itself.
+/// Trait for Conflict-free Replicated Data Types (CRDTs).
 ///
-/// This defines the very simple Conflict-free Replicated Data Type (CRDT)
-/// requirements for data in the tree. This type is only responsible for
-/// maintaining state given an ordered list of operations.
+/// CRDTs define a deterministic `merge` operation that combines two states
+/// into a new state, resolving conflicts automatically. EideticaDB uses this
+/// trait to merge data from different branches of the history.
+///
+/// Implementors must also implement `Default` and `Data`.
 pub trait CRDT: Default + Data {
     /// Merge another CRDT into this one.
     ///
@@ -21,8 +24,11 @@ pub trait CRDT: Default + Data {
         Self: Sized;
 }
 
-/// A simple key-value CRDT implementation that uses the "last write wins" strategy.
-/// When merging, values from the other map will overwrite values in the current map.
+/// A simple key-value CRDT implementation using a last-write-wins (LWW) strategy.
+///
+/// When merging two `KVOverWrite` instances, keys present in the `other` instance
+/// overwrite keys in the `self` instance. Keys unique to either instance are preserved.
+/// This is suitable for configuration or metadata where the latest update should prevail.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct KVOverWrite {
     data: HashMap<String, String>,
