@@ -169,6 +169,7 @@ fn test_entry_id_determinism() {
 
     // First entry
     let mut entry1 = Entry::new("test_root".to_string(), "main_data".to_string());
+    // Parents order should not matter
     entry1.set_parents(vec!["parent1".to_string(), "parent2".to_string()]);
     entry1
         .add_subtree("subtree1".to_string(), "data1".to_string())
@@ -178,18 +179,21 @@ fn test_entry_id_determinism() {
         .unwrap();
     entry1.set_subtree_parents("subtree1", vec!["sub_parent1".to_string()]);
 
-    // Second entry with same content but added in different order
+    // Second entry with same content but adding subtrees and parents in different order
     let mut entry2 = Entry::new("test_root".to_string(), "main_data".to_string());
+    // Order of adding subtrees should not matter
     entry2
         .add_subtree("subtree2".to_string(), "data2".to_string())
         .unwrap();
     entry2
         .add_subtree("subtree1".to_string(), "data1".to_string())
         .unwrap();
-    entry2.set_parents(vec!["parent2".to_string(), "parent1".to_string()]); // Different order
+    // Order of parents should not matter
+    // Now using different order to test that the order of parents does not matter
+    entry2.set_parents(vec!["parent2".to_string(), "parent1".to_string()]);
     entry2.set_subtree_parents("subtree1", vec!["sub_parent1".to_string()]);
 
-    // IDs should be the same due to deterministic ordering of parents and subtrees
+    // IDs should be the same
     assert_eq!(entry1.id(), entry2.id());
 
     // Now modify entry2 in a subtle way

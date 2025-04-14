@@ -26,6 +26,7 @@ struct TreeNode {
     /// The ID of the root `Entry` of the tree this node belongs to.
     pub root: ID,
     /// IDs of the parent `Entry`s in the main tree history.
+    /// The vector is kept sorted alphabetically.
     pub parents: Vec<ID>,
     /// Serialized data associated with this `Entry` in the main tree.
     pub data: RawData,
@@ -38,7 +39,8 @@ struct SubTreeNode {
     /// Subtrees are _named_, and not identified by an ID.
     pub name: String,
     /// IDs of the parent `Entry`s specific to this subtree's history.
-    pub parents: Vec<ID>, // Parents specific to this entry within this subtree
+    /// The vector is kept sorted alphabetically.
+    pub parents: Vec<ID>,
     /// Serialized data specific to this `Entry` within this named subtree.
     pub data: RawData,
 }
@@ -48,11 +50,15 @@ struct SubTreeNode {
 /// An `Entry` represents a snapshot of data within a `Tree` and potentially one or more named `SubTree`s.
 /// It is content-addressable, meaning its `ID` is a cryptographic hash of its contents.
 /// Entries form a Merkle-DAG (Directed Acyclic Graph) structure through parent references.
+///
+/// Internal consistency is maintained by automatically sorting parent ID vectors and the
+/// `subtrees` vector (by subtree name). This ensures deterministic hashing for content addressing.
 #[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Entry {
     /// The main tree node data, including the root ID, parents in the main tree, and associated data.
     tree: TreeNode,
     /// A collection of named subtrees this entry contains data for.
+    /// The vector is kept sorted alphabetically by subtree name.
     subtrees: Vec<SubTreeNode>,
     // TODO: Security
     // The ID of the key that was used to sign the entry.
@@ -92,13 +98,29 @@ impl Entry {
         entry
     }
 
+    /// Sort the subtrees vector by subtree name to ensure consistent ordering.
+    /// This is called internally whenever the subtrees collection is modified.
+    fn sort_subtrees(&mut self) {
+        self.subtrees.sort_by(|a, b| a.name.cmp(&b.name));
+    }
+
+    /// Sort parent IDs to ensure consistent ordering.
+    /// This is called internally whenever parent vectors are modified.
+    fn sort_parents(parents: &mut Vec<ID>) {
+        parents.sort();
+    }
+
     /// Add data for a named subtree to this entry.
     ///
     /// If an entry contributes data to a specific domain or table, it's added via a `SubTreeNode`.
+    /// Subtrees are automatically kept sorted by name.
     ///
     /// # Arguments
     /// * `name` - The name of the subtree (e.g., "users", "products").
     /// * `data` - `RawData` (serialized string) specific to this entry for the named subtree.
+    ///
+    /// # Errors
+    /// Returns `Error::AlreadyExists` if a subtree with the given name already exists in this entry.
     pub fn add_subtree(&mut self, name: String, data: RawData) -> Result<()> {
         // Verify that the subtree does not already exist
         if self.subtrees.iter().any(|node| node.name == name) {
@@ -109,51 +131,29 @@ impl Entry {
             data,
             parents: vec![],
         });
+        // Sort subtrees by name
+        self.sort_subtrees();
         Ok(())
     }
 
     /// Calculate the content-addressable ID (SHA-256 hash) of the entry.
     ///
-    /// The hash includes the root ID, main tree data, and data from all subtrees,
-    /// ensuring that any change to the entry results in a different ID.
-    /// Subtrees and parents are sorted before hashing for determinism.
-    ///
-    /// TODO: Formalize the hashing scheme for SRI compatibility.
+    /// The hash includes the root ID, main tree data, and data from all subtrees.
+    /// Parent vectors and the subtree vector are implicitly sorted before serialization for hashing,
+    /// ensuring that any change to the entry results in a different ID and that the ID is deterministic
+    /// regardless of the order parents or subtrees were added.
     pub fn id(&self) -> String {
+        // Convert the entry to JSON. Serde will serialize fields in the order they are defined.
+        // Since `parents` within TreeNode and SubTreeNode, and `subtrees` within Entry are kept sorted,
+        // the resulting JSON string is deterministic.
+        let json = serde_json::to_string(self).unwrap();
+        // hash the json
         let mut hasher = Sha256::new();
-        hasher.update(self.tree.root.as_bytes());
-
-        // Hash the raw tree data
-        hasher.update(self.tree.data.as_bytes());
-
-        // Hash all subtrees in a deterministic order
-        let mut sorted_subtrees = self.subtrees.clone();
-        sorted_subtrees.sort_by(|a, b| a.name.cmp(&b.name)); // Sort by name
-
-        for subtree in &sorted_subtrees {
-            // Use sorted list
-            hasher.update(subtree.name.as_bytes());
-            hasher.update(subtree.data.as_bytes()); // Hash raw data directly
-
-            // Hash subtree parents deterministically
-            let mut sorted_parents = subtree.parents.clone();
-            sorted_parents.sort(); // Sort parent IDs
-            for parent in &sorted_parents {
-                // Use sorted list
-                hasher.update(parent.as_bytes());
-            }
-        }
-
-        // Hash tree parents deterministically
-        let mut sorted_tree_parents = self.tree.parents.clone();
-        sorted_tree_parents.sort(); // Sort parent IDs
-        for parent in &sorted_tree_parents {
-            // Use sorted list
-            hasher.update(parent.as_bytes());
-        }
-
-        // Convert to hex string for SRI compatibility
-        format!("{:x}", hasher.finalize())
+        hasher.update(json.as_bytes());
+        // convert the hash to a string
+        let hash = hasher.finalize();
+        // convert the hash to a hex string
+        format!("{:x}", hash)
     }
 
     /// Get the ID of the root `Entry` of the tree this entry belongs to.
@@ -186,6 +186,7 @@ impl Entry {
     }
 
     /// Get the names of all subtrees this entry contains data for.
+    /// The names are returned in alphabetical order.
     pub fn subtrees(&self) -> Result<Vec<String>> {
         if self.subtrees.is_empty() {
             return Err(Error::NotFound);
@@ -213,12 +214,13 @@ impl Entry {
     }
 
     /// Get the IDs of the parent entries in the main tree history.
-    /// Note: The returned Parents struct should be used for checking containment
+    /// The parent IDs are returned in alphabetical order.
     pub fn parents(&self) -> Result<Vec<ID>> {
         Ok(self.tree.parents.clone())
     }
 
     /// Get the IDs of the parent entries specific to a named subtree's history.
+    /// The parent IDs are returned in alphabetical order.
     pub fn subtree_parents(&self, subtree: &str) -> Result<Vec<ID>> {
         self.subtrees
             .iter()
@@ -234,19 +236,22 @@ impl Entry {
     }
 
     /// Set the parent IDs for the main tree history.
+    /// The provided vector will be sorted alphabetically internally.
     /// Typically used internally by `Tree::insert`.
     pub fn set_parents(&mut self, parents: Vec<ID>) {
-        self.tree.parents = parents.clone();
+        self.tree.parents = parents;
+        Self::sort_parents(&mut self.tree.parents);
     }
 
     /// Set the parent IDs for a specific named subtree's history.
+    /// The provided vector will be sorted alphabetically internally.
+    /// If the subtree does not exist, this operation has no effect.
     /// Typically used internally by `Tree::insert`.
     pub fn set_subtree_parents(&mut self, subtree: &str, parents: Vec<ID>) {
-        self.subtrees
-            .iter_mut()
-            .find(|node| node.name == subtree)
-            .unwrap()
-            .parents = parents;
+        if let Some(node) = self.subtrees.iter_mut().find(|node| node.name == subtree) {
+            node.parents = parents;
+            Self::sort_parents(&mut node.parents);
+        }
     }
 }
 
@@ -284,5 +289,70 @@ mod tests {
 
         // Ensure only one subtree exists
         assert_eq!(entry.subtrees.len(), 1);
+    }
+
+    #[test]
+    fn test_subtrees_are_sorted() {
+        let mut entry = Entry::new("root_id".to_string(), "{}".to_string());
+
+        // Add subtrees in non-alphabetical order
+        entry
+            .add_subtree("z_subtree".to_string(), "{}".to_string())
+            .unwrap();
+        entry
+            .add_subtree("a_subtree".to_string(), "{}".to_string())
+            .unwrap();
+        entry
+            .add_subtree("m_subtree".to_string(), "{}".to_string())
+            .unwrap();
+
+        // Verify subtrees are stored in alphabetical order
+        assert_eq!(entry.subtrees.len(), 3);
+        assert_eq!(entry.subtrees[0].name, "a_subtree");
+        assert_eq!(entry.subtrees[1].name, "m_subtree");
+        assert_eq!(entry.subtrees[2].name, "z_subtree");
+
+        // Verify subtrees() method returns them in sorted order too
+        let subtree_names = entry.subtrees().unwrap();
+        assert_eq!(subtree_names, vec!["a_subtree", "m_subtree", "z_subtree"]);
+    }
+
+    #[test]
+    fn test_parents_are_sorted() {
+        let mut entry = Entry::new("root_id".to_string(), "{}".to_string());
+
+        // Set parents in non-alphabetical order
+        entry.set_parents(vec![
+            "z_parent".to_string(),
+            "a_parent".to_string(),
+            "m_parent".to_string(),
+        ]);
+
+        // Verify parents are sorted
+        let parents = entry.parents().unwrap();
+        assert_eq!(parents.len(), 3);
+        assert_eq!(parents[0], "a_parent");
+        assert_eq!(parents[1], "m_parent");
+        assert_eq!(parents[2], "z_parent");
+
+        // Test subtree parents sorting
+        entry
+            .add_subtree("test_subtree".to_string(), "{}".to_string())
+            .unwrap();
+        entry.set_subtree_parents(
+            "test_subtree",
+            vec![
+                "z_subparent".to_string(),
+                "a_subparent".to_string(),
+                "m_subparent".to_string(),
+            ],
+        );
+
+        // Verify subtree parents are sorted
+        let subtree_parents = entry.subtree_parents("test_subtree").unwrap();
+        assert_eq!(subtree_parents.len(), 3);
+        assert_eq!(subtree_parents[0], "a_subparent");
+        assert_eq!(subtree_parents[1], "m_subparent");
+        assert_eq!(subtree_parents[2], "z_subparent");
     }
 }
