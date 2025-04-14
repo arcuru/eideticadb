@@ -168,6 +168,11 @@ impl Tree {
         &self.root
     }
 
+    /// Get a reference to the backend
+    pub fn backend(&self) -> &Arc<Mutex<Box<dyn Backend>>> {
+        &self.backend
+    }
+
     /// Retrieve the root entry from the backend
     pub fn get_root(&self) -> Result<Entry> {
         let backend_guard = self.lock_backend()?;
