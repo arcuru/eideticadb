@@ -86,7 +86,9 @@ impl Entry {
         entry.tree.root = "".to_string();
         entry.tree.data = data;
         // Add a subtree with the name "root" to mark this as a root entry
-        entry.add_subtree("root".to_string(), "{}".to_string());
+        entry
+            .add_subtree("root".to_string(), "{}".to_string())
+            .unwrap();
         entry
     }
 
@@ -97,12 +99,17 @@ impl Entry {
     /// # Arguments
     /// * `name` - The name of the subtree (e.g., "users", "products").
     /// * `data` - `RawData` (serialized string) specific to this entry for the named subtree.
-    pub fn add_subtree(&mut self, name: String, data: RawData) {
+    pub fn add_subtree(&mut self, name: String, data: RawData) -> Result<()> {
+        // Verify that the subtree does not already exist
+        if self.subtrees.iter().any(|node| node.name == name) {
+            return Err(Error::AlreadyExists);
+        }
         self.subtrees.push(SubTreeNode {
             name,
             data,
             parents: vec![],
         });
+        Ok(())
     }
 
     /// Calculate the content-addressable ID (SHA-256 hash) of the entry.
@@ -240,5 +247,42 @@ impl Entry {
             .find(|node| node.name == subtree)
             .unwrap()
             .parents = parents;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Error;
+
+    #[test]
+    fn test_add_subtree_success() {
+        let mut entry = Entry::new("root_id".to_string(), "{}".to_string());
+        let result = entry.add_subtree("my_subtree".to_string(), "{}".to_string());
+        assert!(result.is_ok());
+        assert!(entry.in_subtree("my_subtree"));
+        assert_eq!(entry.subtrees.len(), 1);
+    }
+
+    #[test]
+    fn test_add_subtree_duplicate() {
+        let mut entry = Entry::new("root_id".to_string(), "{}".to_string());
+        // Add first time
+        entry
+            .add_subtree("my_subtree".to_string(), "{}".to_string())
+            .expect("First add should succeed");
+
+        // Try adding again
+        let result = entry.add_subtree("my_subtree".to_string(), "{}".to_string());
+
+        // Assert error is AlreadyExists
+        match result {
+            Err(Error::AlreadyExists) => { /* Expected error */ }
+            Ok(_) => panic!("Adding duplicate subtree should have failed"),
+            Err(e) => panic!("Unexpected error type: {:?}", e),
+        }
+
+        // Ensure only one subtree exists
+        assert_eq!(entry.subtrees.len(), 1);
     }
 }

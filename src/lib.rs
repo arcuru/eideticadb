@@ -27,6 +27,9 @@ pub enum Error {
     #[error("Entry not found")]
     NotFound,
 
+    #[error("Already exists")]
+    AlreadyExists,
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 

@@ -493,7 +493,9 @@ mod tests {
 
         // Insert first entry
         let mut entry1 = Entry::new(tree.root_id().clone(), "{}".to_string());
-        entry1.add_subtree("operation1".to_string(), "{}".to_string());
+        entry1
+            .add_subtree("operation1".to_string(), "{}".to_string())
+            .unwrap();
         entry1.set_parents(vec![root_id.clone()]);
         let id1 = tree.insert(entry1).unwrap();
 
@@ -506,7 +508,9 @@ mod tests {
 
         // Insert second entry
         let mut entry2 = Entry::new(tree.root_id().clone(), "{}".to_string());
-        entry2.add_subtree("operation1".to_string(), "{}".to_string());
+        entry2
+            .add_subtree("operation1".to_string(), "{}".to_string())
+            .unwrap();
         entry2.set_parents(vec![id1.clone()]);
         let _id2 = tree.insert(entry2).unwrap();
 
@@ -529,15 +533,21 @@ mod tests {
 
         // Insert entries with different operations
         let mut entry1 = Entry::new(tree.root_id().clone(), "{}".to_string());
-        entry1.add_subtree("operation1".to_string(), "{}".to_string());
+        entry1
+            .add_subtree("operation1".to_string(), "{}".to_string())
+            .unwrap();
         let _id1 = tree.insert(entry1).unwrap();
 
         let mut entry2 = Entry::new(tree.root_id().clone(), "{}".to_string());
-        entry2.add_subtree("operation2".to_string(), "{}".to_string());
+        entry2
+            .add_subtree("operation2".to_string(), "{}".to_string())
+            .unwrap();
         let id2 = tree.insert(entry2).unwrap();
 
         let mut entry3 = Entry::new(tree.root_id().clone(), "{}".to_string());
-        entry3.add_subtree("operation1".to_string(), "{}".to_string());
+        entry3
+            .add_subtree("operation1".to_string(), "{}".to_string())
+            .unwrap();
         let id3 = tree.insert(entry3).unwrap();
 
         // Check subtree tips for operation1
@@ -567,7 +577,9 @@ mod tests {
 
         // Insert first entry
         let mut entry1 = Entry::new(tree.root_id().clone(), "{}".to_string());
-        entry1.add_subtree("operation1".to_string(), "{}".to_string());
+        entry1
+            .add_subtree("operation1".to_string(), "{}".to_string())
+            .unwrap();
 
         // Use the normal insert method for the first entry
         let id1 = tree.insert(entry1).unwrap();
@@ -585,7 +597,9 @@ mod tests {
         data2_map.insert("key".to_string(), "value2".to_string());
         let data2_json = serde_json::to_string(&data2_map).unwrap();
         let mut entry2 = Entry::new(tree.root_id().clone(), data2_json.clone());
-        entry2.add_subtree("operation1".to_string(), data2_json);
+        entry2
+            .add_subtree("operation1".to_string(), data2_json)
+            .unwrap();
         entry2.set_parents(vec![id1.clone()]);
         let id2 = entry2.id(); // Calculate ID before moving
         tree.insert_raw(entry2).unwrap(); // Insert entry2
@@ -595,7 +609,9 @@ mod tests {
         data3_map.insert("key".to_string(), "value3".to_string());
         let data3_json = serde_json::to_string(&data3_map).unwrap();
         let mut entry3 = Entry::new(tree.root_id().clone(), data3_json.clone());
-        entry3.add_subtree("operation1".to_string(), data3_json);
+        entry3
+            .add_subtree("operation1".to_string(), data3_json)
+            .unwrap();
         entry3.set_parents(vec![id1.clone()]);
         let id3 = entry3.id(); // Calculate ID before moving
         tree.insert_raw(entry3).unwrap(); // Insert entry3
@@ -823,10 +839,12 @@ mod tests {
         initial_data.insert("key2".to_string(), "value2".to_string());
 
         let mut entry = Entry::new(tree.root_id().clone(), "{}".to_string());
-        entry.add_subtree(
-            "custom_subtree".to_string(),
-            serde_json::to_string(&KVOverWrite::from_hashmap(initial_data)).unwrap(),
-        );
+        entry
+            .add_subtree(
+                "custom_subtree".to_string(),
+                serde_json::to_string(&KVOverWrite::from_hashmap(initial_data)).unwrap(),
+            )
+            .unwrap();
 
         let _id1 = tree.insert(entry).expect("Failed to insert first entry");
 
@@ -836,10 +854,12 @@ mod tests {
         updated_data.insert("key3".to_string(), "value3".to_string()); // Add new
 
         let mut entry2 = Entry::new(tree.root_id().clone(), "{}".to_string());
-        entry2.add_subtree(
-            "custom_subtree".to_string(),
-            serde_json::to_string(&KVOverWrite::from_hashmap(updated_data)).unwrap(),
-        );
+        entry2
+            .add_subtree(
+                "custom_subtree".to_string(),
+                serde_json::to_string(&KVOverWrite::from_hashmap(updated_data)).unwrap(),
+            )
+            .unwrap();
 
         tree.insert(entry2).expect("Failed to insert second entry");
 
@@ -875,10 +895,12 @@ mod tests {
         initial_data.insert("version".to_string(), "1.0".to_string());
 
         let mut entry1 = Entry::new(root_id.clone(), "{}".to_string());
-        entry1.add_subtree(
-            "data_subtree".to_string(),
-            serde_json::to_string(&KVOverWrite::from_hashmap(initial_data)).unwrap(),
-        );
+        entry1
+            .add_subtree(
+                "data_subtree".to_string(),
+                serde_json::to_string(&KVOverWrite::from_hashmap(initial_data)).unwrap(),
+            )
+            .unwrap();
 
         let id1 = tree
             .insert_raw(entry1)
@@ -892,10 +914,12 @@ mod tests {
         branch1_data.insert("description".to_string(), "From branch 1".to_string());
 
         let mut entry2 = Entry::new(root_id.clone(), "{}".to_string());
-        entry2.add_subtree(
-            "data_subtree".to_string(),
-            serde_json::to_string(&KVOverWrite::from_hashmap(branch1_data)).unwrap(),
-        );
+        entry2
+            .add_subtree(
+                "data_subtree".to_string(),
+                serde_json::to_string(&KVOverWrite::from_hashmap(branch1_data)).unwrap(),
+            )
+            .unwrap();
         entry2.set_parents(vec![id1.clone()]);
         entry2.set_subtree_parents("data_subtree", vec![id1.clone()]);
 
@@ -909,10 +933,12 @@ mod tests {
         branch2_data.insert("status".to_string(), "active".to_string());
 
         let mut entry3 = Entry::new(root_id.clone(), "{}".to_string());
-        entry3.add_subtree(
-            "data_subtree".to_string(),
-            serde_json::to_string(&KVOverWrite::from_hashmap(branch2_data)).unwrap(),
-        );
+        entry3
+            .add_subtree(
+                "data_subtree".to_string(),
+                serde_json::to_string(&KVOverWrite::from_hashmap(branch2_data)).unwrap(),
+            )
+            .unwrap();
         entry3.set_parents(vec![id1.clone()]);
         entry3.set_subtree_parents("data_subtree", vec![id1.clone()]);
 
@@ -959,10 +985,12 @@ mod tests {
 
         // Create an entry with an empty subtree
         let mut entry = Entry::new(tree.root_id().clone(), "{}".to_string());
-        entry.add_subtree(
-            "empty_subtree".to_string(),
-            serde_json::to_string(&KVOverWrite::new()).unwrap(),
-        );
+        entry
+            .add_subtree(
+                "empty_subtree".to_string(),
+                serde_json::to_string(&KVOverWrite::new()).unwrap(),
+            )
+            .unwrap();
 
         tree.insert(entry).expect("Failed to insert entry");
 

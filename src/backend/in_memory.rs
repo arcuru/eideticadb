@@ -581,7 +581,9 @@ mod tests {
         // 3. An entry with subtrees (also a root)
         let mut with_subtree = Entry::new_top_level("{\"key\":\"with_subtree\"}".to_string());
         let subtree_data = "{\"subtree_key\":\"subtree_value\"}".to_string();
-        with_subtree.add_subtree("custom_subtree".to_string(), subtree_data);
+        with_subtree
+            .add_subtree("custom_subtree".to_string(), subtree_data)
+            .unwrap();
         let with_subtree_id = with_subtree.id();
 
         // Store all entries
@@ -703,13 +705,17 @@ mod tests {
 
         // Entry 1 - parent in the subtree
         let mut entry1 = Entry::new(root_id.clone(), "{}".to_string());
-        entry1.add_subtree(subtree_name.clone(), "{}".to_string());
+        entry1
+            .add_subtree(subtree_name.clone(), "{}".to_string())
+            .unwrap();
         let id1 = entry1.id();
         backend.put(entry1.clone())?;
 
         // Entry 2 - child of 1 in subtree
         let mut entry2 = Entry::new(root_id.clone(), "{}".to_string());
-        entry2.add_subtree(subtree_name.clone(), "{}".to_string());
+        entry2
+            .add_subtree(subtree_name.clone(), "{}".to_string())
+            .unwrap();
         entry2.set_parents(vec![id1.clone()]);
         entry2.set_subtree_parents(&subtree_name, vec![id1.clone()]);
         let id2 = entry2.id();
@@ -717,7 +723,9 @@ mod tests {
 
         // Entry 3 - also child of 1 in subtree (branch)
         let mut entry3 = Entry::new(root_id.clone(), "{}".to_string());
-        entry3.add_subtree(subtree_name.clone(), "{}".to_string());
+        entry3
+            .add_subtree(subtree_name.clone(), "{}".to_string())
+            .unwrap();
         entry3.set_parents(vec![id1.clone()]);
         entry3.set_subtree_parents(&subtree_name, vec![id1.clone()]);
         let id3 = entry3.id();
@@ -756,18 +764,24 @@ mod tests {
 
         // Entry 1 (in subtree A)
         let mut entry1 = Entry::new(root_id.clone(), "{}".to_string());
-        entry1.add_subtree(subtree_a.clone(), "{}".to_string());
+        entry1
+            .add_subtree(subtree_a.clone(), "{}".to_string())
+            .unwrap();
         let id1 = entry1.id();
         backend.put(entry1.clone())?;
 
         // Entry 2 (in subtree B)
         let mut entry2 = Entry::new(root_id.clone(), "{}".to_string());
-        entry2.add_subtree("subtree_B".to_string(), "{}".to_string());
+        entry2
+            .add_subtree("subtree_B".to_string(), "{}".to_string())
+            .unwrap();
         backend.put(entry2.clone())?;
 
         // Entry 3 (in subtree A, child of 1)
         let mut entry3 = Entry::new(root_id.clone(), "{}".to_string());
-        entry3.add_subtree(subtree_a.clone(), "{}".to_string());
+        entry3
+            .add_subtree(subtree_a.clone(), "{}".to_string())
+            .unwrap();
         entry3.set_parents(vec![id1.clone()]);
         entry3.set_subtree_parents(&subtree_a, vec![id1.clone()]);
         let id3 = entry3.id();
@@ -787,7 +801,9 @@ mod tests {
 
         // Entry 1 (root A)
         let mut entry1 = Entry::new_top_level("{}".to_string());
-        entry1.add_subtree("data".to_string(), "{}".to_string());
+        entry1
+            .add_subtree("data".to_string(), "{}".to_string())
+            .unwrap();
         let id1 = entry1.id();
         backend.put(entry1.clone())?;
 
@@ -820,7 +836,9 @@ mod tests {
 
         // Add some data
         let mut entry1 = Entry::new("root1".to_string(), "{}".to_string());
-        entry1.add_subtree("sub1".to_string(), "{\"key\":\"value1\"}".to_string());
+        entry1
+            .add_subtree("sub1".to_string(), "{\"key\":\"value1\"}".to_string())
+            .unwrap();
         let id1 = entry1.id();
         backend.put(entry1.clone())?;
 
@@ -934,25 +952,35 @@ mod tests {
 
         // Entry A in subtree "alpha"
         let mut entry_a = Entry::new(root_id.clone(), "{}".to_string());
-        entry_a.add_subtree("alpha".to_string(), "{\"key\":\"a\"}".to_string());
+        entry_a
+            .add_subtree("alpha".to_string(), "{\"key\":\"a\"}".to_string())
+            .unwrap();
         entry_a.set_parents(vec![root_id.clone()]);
         let id_a = entry_a.id();
 
         // Entry B in subtree "alpha" (child of A in alpha)
         let mut entry_b = Entry::new(root_id.clone(), "{}".to_string());
-        entry_b.add_subtree("alpha".to_string(), "{\"key\":\"b\"}".to_string());
+        entry_b
+            .add_subtree("alpha".to_string(), "{\"key\":\"b\"}".to_string())
+            .unwrap();
         entry_b.set_parents(vec![id_a.clone()]);
         entry_b.set_subtree_parents("alpha", vec![id_a.clone()]);
 
         // Entry C in subtree "beta" only
         let mut entry_c = Entry::new(root_id.clone(), "{}".to_string());
-        entry_c.add_subtree("beta".to_string(), "{\"key\":\"c\"}".to_string());
+        entry_c
+            .add_subtree("beta".to_string(), "{\"key\":\"c\"}".to_string())
+            .unwrap();
         entry_c.set_parents(vec![entry_b.id().clone()]);
 
         // Entry D in both subtrees (no parent in alpha)
         let mut entry_d = Entry::new(root_id.clone(), "{}".to_string());
-        entry_d.add_subtree("alpha".to_string(), "{\"key\":\"d\"}".to_string());
-        entry_d.add_subtree("beta".to_string(), "{\"key\":\"d-beta\"}".to_string());
+        entry_d
+            .add_subtree("alpha".to_string(), "{\"key\":\"d\"}".to_string())
+            .unwrap();
+        entry_d
+            .add_subtree("beta".to_string(), "{\"key\":\"d-beta\"}".to_string())
+            .unwrap();
         entry_d.set_parents(vec![entry_c.id().clone()]);
         entry_d.set_subtree_parents("alpha", vec![entry_b.id().clone()]);
         entry_d.set_subtree_parents("beta", vec![entry_c.id().clone()]);
