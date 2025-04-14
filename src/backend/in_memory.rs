@@ -135,7 +135,7 @@ impl InMemoryBackend {
     /// # Arguments
     /// * `tree` - The ID of the tree context.
     /// * `subtree` - An optional subtree name. If `Some`, calculates heights within
-    ///               that specific subtree. If `None`, calculates heights within the main tree.
+    ///   that specific subtree. If `None`, calculates heights within the main tree.
     ///
     /// # Returns
     /// A `Result` containing a `HashMap` mapping entry IDs to their calculated height, or an error.

@@ -106,7 +106,7 @@ impl Entry {
 
     /// Sort parent IDs to ensure consistent ordering.
     /// This is called internally whenever parent vectors are modified.
-    fn sort_parents(parents: &mut Vec<ID>) {
+    fn sort_parents(parents: &mut [ID]) {
         parents.sort();
     }
 
