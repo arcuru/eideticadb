@@ -17,6 +17,10 @@ pub mod backend;
 pub mod basedb;
 pub mod data;
 pub mod entry;
+pub mod tree;
+
+/// Re-export the `Tree` struct for easier access.
+pub use tree::Tree;
 
 /// Result type used throughout the EideticaDB library.
 pub type Result<T> = std::result::Result<T, Error>;

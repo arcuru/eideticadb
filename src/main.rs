@@ -1,7 +1,8 @@
 use eideticadb::backend::InMemoryBackend;
-use eideticadb::basedb::{BaseDB, Tree};
+use eideticadb::basedb::BaseDB;
 use eideticadb::data::KVOverWrite;
 use eideticadb::entry::Entry;
+use eideticadb::Tree;
 use signal_hook::flag as signal_flag;
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};

@@ -3,7 +3,8 @@ mod model;
 use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
 use eideticadb::backend::InMemoryBackend;
-use eideticadb::basedb::{BaseDB, Tree};
+use eideticadb::basedb::BaseDB;
+use eideticadb::Tree;
 use model::{Todo, TodoList};
 use std::path::PathBuf;
 
