@@ -12,7 +12,7 @@ tasks:
   ci:local:
     desc: Run CI locally
     aliases: [ci]
-    deps: [audit, doc, fmt, test, nix:check, nix:build, clippy, build]
+    deps: [audit, doc, fmt, test, nix:check, nix:build, clippy, build, examples]
   nix:check:
     desc: Run Nix CI checks
     cmds:
@@ -57,3 +57,8 @@ tasks:
     desc: Generate coverage data
     aliases: [cov]
     cmd: cargo tarpaulin --skip-clean --include-tests --output-dir coverage --out lcov
+  examples:
+    desc: Build/Check all examples
+    cmds:
+      - cd examples/todo && cargo build
+      - cd examples/todo && cargo clippy --all-targets --all-features -- -D warnings
