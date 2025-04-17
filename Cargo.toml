@@ -25,3 +25,11 @@ optional = true
 [[bin]]
 name = "eideticadb"
 required-features = ["signal-hook"]
+
+# Profile configuration for optimizing builds
+[profile.dev]
+# Keep the local package as debug build for fast compilation
+opt-level = 0
+# But compile dependencies with optimizations for better performance
+[profile.dev.package."*"]
+opt-level = 3
