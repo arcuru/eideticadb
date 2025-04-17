@@ -24,11 +24,11 @@ tasks:
   clippy:
     desc: Run clippy
     cmds:
-      - cargo clippy --all-targets --all-features -- -D warnings
+      - cargo clippy --workspace --all-targets --all-features -- -D warnings
   clippy:fix:
     desc: Run clippy fixes
     cmds:
-      - cargo clippy --fix --allow-dirty --all-targets --all-features -- -D warnings
+      - cargo clippy --workspace --fix --allow-dirty --all-targets --all-features -- -D warnings
   fmt:
     desc: Run all formatters
     cmds:
@@ -38,27 +38,27 @@ tasks:
   test:
     desc: Run all tests
     aliases: [t]
-    cmd: cargo nextest run
+    cmd: cargo nextest run --workspace --all-features
   doc:
     desc: Build the documentation
-    cmd: cargo doc
+    cmd: cargo doc --workspace --all-features
   audit:
     desc: Run cargo security audit
     cmd: cargo audit
   build:debug:
     desc: Build the project
     aliases: [b, build]
-    cmd: cargo build
+    cmd: cargo build --workspace --all-targets --all-features
   build:release:
     desc: Build the project release
     aliases: [br, release]
-    cmd: cargo build --release
+    cmd: cargo build --workspace --all-targets --all-features --release
   coverage:
     desc: Generate coverage data
     aliases: [cov]
-    cmd: cargo tarpaulin --skip-clean --include-tests --output-dir coverage --out lcov
+    cmd: cargo tarpaulin --workspace --skip-clean --include-tests --all-features --output-dir coverage --out lcov
   examples:
     desc: Build/Check all examples
     cmds:
-      - cd examples/todo && cargo build
+      - cd examples/todo && cargo build --all-targets --all-features
       - cd examples/todo && cargo clippy --all-targets --all-features -- -D warnings
