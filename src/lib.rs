@@ -11,6 +11,9 @@
 //! * **Backends (`backend::Backend`)**: A pluggable storage layer for persisting entries.
 //! * **BaseDB (`basedb::BaseDB`)**: The main database struct that manages trees and interacts with a backend.
 //! * **CRDTs (`data::CRDT`)**: Conflict-free Replicated Data Types used for merging data from different entries, particularly for settings and subtree data.
+//! * **SubTrees (`subtree::SubTree`)**: Named data structures within a tree that provide specialized data access patterns:
+//!     * **KVStore (`subtree::KVStore`)**: A key-value store within a tree.
+//!     * **RowStore (`subtree::RowStore`)**: A record-oriented store with automatic primary key generation, similar to a database table.
 //! * **Merkle-CRDT**: The underlying principle combining Merkle DAGs (formed by entries and parent links) with CRDTs for efficient, decentralized data synchronization.
 
 pub mod atomicop;

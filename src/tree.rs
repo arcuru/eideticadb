@@ -176,35 +176,4 @@ impl Tree {
             .collect();
         entries
     }
-
-    /// Get the current tips (leaf entries) for a specific subtree within this tree.
-    ///
-    /// Subtrees represent separate, named histories within the main tree.
-    ///
-    /// # Arguments
-    /// * `subtree` - The name of the subtree.
-    ///
-    /// # Returns
-    /// A `Result` containing a vector of `ID`s for the tip entries of the specified subtree or an error.
-    pub fn get_subtree_tips(&self, subtree: &str) -> Result<Vec<ID>> {
-        let backend_guard = self.lock_backend()?;
-        backend_guard.get_subtree_tips(&self.root, subtree)
-    }
-
-    /// Get the full `Entry` objects for the current tips of a specific subtree.
-    ///
-    /// # Arguments
-    /// * `subtree` - The name of the subtree.
-    ///
-    /// # Returns
-    /// A `Result` containing a vector of the tip `Entry` objects for the specified subtree or an error.
-    pub fn get_subtree_tip_entries(&self, subtree: &str) -> Result<Vec<Entry>> {
-        let backend_guard = self.lock_backend()?;
-        let tips = backend_guard.get_subtree_tips(&self.root, subtree)?;
-        let entries: Result<Vec<_>> = tips
-            .iter()
-            .map(|id| backend_guard.get(id).cloned())
-            .collect();
-        entries
-    }
 }

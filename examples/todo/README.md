@@ -1,61 +1,88 @@
-# EideticaDB Todo App Demo
+# Todo CLI App
 
-This is a simple CLI todo list application that demonstrates how to use the EideticaDB library. It provides basic functionality to manage a list of tasks.
+A simple command-line Todo application that demonstrates the usage of EideticaDB.
 
-## Features
+## Overview
 
-- Add new tasks
+This Todo CLI application demonstrates how EideticaDB can be used to build a simple database-backed application. The app allows you to:
+
+- Add new tasks to your todo list
 - Mark tasks as complete
-- List all tasks
-- Data persistence using EideticaDB
+- List all tasks with their completion status
+
+All data is persisted to a local file using EideticaDB's InMemoryBackend with file serialization.
+To specify which file it persists into, pass the option `--database-path /path/to/file.json`.
 
 ## Usage
 
-Build the application:
-
-```bash
-cargo build
+```
+cargo run -- <COMMAND>
 ```
 
-### Commands
+Available commands:
 
-#### Add a task
+- `add <TITLE>` - Add a new task
+- `complete <ID>` - Mark a task as complete
+- `list` - List all tasks
 
-```bash
-cargo run -- add "Buy groceries"
-```
+## Example Usage Script
 
-#### Mark a task as complete
-
-```bash
-cargo run -- complete <task-id>
-```
-
-The task ID is displayed when listing tasks.
-
-#### List all tasks
+You can try the following commands to test the application:
 
 ```bash
-cargo run -- list
+# Create a new todo database
+eidetica-todo add "Buy groceries"
+eidetica-todo add "Finish project report"
+eidetica-todo add "Call mom"
+
+# List all todos
+eidetica-todo list
+
+# Complete a task (replace ABC123 with an actual ID from your list)
+eidetica-todo complete ABC123
+
+# List all todos again to see the completed task
+eidetica-todo list
 ```
 
-### Database
+## How It Works
 
-By default, the application saves its database to `todo_db.json` in the current directory. You can specify a different file with the `-d` or `--database-path` option:
+This app uses several EideticaDB features:
+
+- **BaseDB**: The main database interface
+- **InMemoryBackend**: Memory storage with JSON file persistence
+- **Tree**: A hierarchical data structure
+- **RowStore**: A subtree type for storing record-like data
+
+Each todo item is stored as a record in a RowStore subtree named "todos" within the main database tree.
+
+## Data Model
+
+Each todo item has:
+
+- A title
+- A completion status
+- Creation timestamp
+- Completion timestamp (when completed)
+
+The unique ID for each task is provided by the EideticaDB RowStore, which automatically generates and manages primary keys.
+
+## Automated Test Script
+
+For a more comprehensive demonstration, an automated test script is included in this repository. This script:
+
+- Creates a fresh database
+- Adds multiple tasks
+- Lists all tasks
+- Automatically extracts a task ID for the "Buy groceries" task
+- Completes that task
+- Lists the tasks again to show the updated status
+
+You can run it with:
 
 ```bash
-cargo run -- -d my_todos.json list
+chmod +x test.sh
+./test.sh
 ```
 
-## How it Works
-
-This application demonstrates several core EideticaDB concepts:
-
-1. Using the `BaseDB` to manage trees of data
-2. Creating and accessing trees
-3. Creating and managing entries with subtrees
-4. Implementing the `CRDT` trait for custom data types
-5. Using parent references to maintain the Merkle DAG structure
-6. Serializing/deserializing data to/from entries
-
-The todo items are stored in a tree called "todo" with a subtree called "todos". The `TodoList` struct implements the `CRDT` trait, allowing it to be merged deterministically in a distributed environment.
+The test script uses standard shell commands to extract the task ID from the list output, making the demonstration fully automatic without requiring manual intervention.

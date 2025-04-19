@@ -234,6 +234,7 @@ dependencies = [
  "sha2",
  "thiserror",
  "typetag",
+ "uuid",
 ]
 
 [[package]]

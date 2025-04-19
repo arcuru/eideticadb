@@ -1,11 +1,12 @@
-mod model;
-
 use anyhow::{anyhow, Result};
+use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use eideticadb::backend::InMemoryBackend;
 use eideticadb::basedb::BaseDB;
+use eideticadb::subtree::RowStore;
+use eideticadb::Error;
 use eideticadb::Tree;
-use model::{Todo, TodoList};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -35,6 +36,31 @@ enum Commands {
     },
     /// List all tasks
     List,
+}
+
+///  A very basic todo list item
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Todo {
+    pub title: String,
+    pub completed: bool,
+    pub created_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+impl Todo {
+    pub fn new(title: String) -> Self {
+        Self {
+            title,
+            completed: false,
+            created_at: Utc::now(),
+            completed_at: None,
+        }
+    }
+
+    pub fn complete(&mut self) {
+        self.completed = true;
+        self.completed_at = Some(Utc::now());
+    }
 }
 
 fn main() -> Result<()> {
@@ -95,6 +121,7 @@ fn load_or_create_todo_tree(db: &BaseDB) -> Result<Tree> {
     let tree_name = "todo";
 
     // Try to find the tree by name among all trees
+    // This will be easier eventually
     let all_trees = db.all_trees()?;
     for tree in all_trees {
         if let Ok(name) = tree.get_name() {
@@ -108,120 +135,86 @@ fn load_or_create_todo_tree(db: &BaseDB) -> Result<Tree> {
     let mut settings = eideticadb::data::KVOverWrite::new();
     settings.set("name".to_string(), tree_name.to_string());
 
-    // Create the tree with initial empty todo list
     let tree = db.new_tree(settings)?;
-    let todo_list = TodoList::new();
-    create_initial_entry(&tree, todo_list)?;
+
+    // Create an initial empty todos subtree
+    let op = tree.new_operation()?;
+    // We don't need to add any data here as the subtree will be created when needed
+    op.commit()?;
 
     Ok(tree)
 }
 
-fn create_initial_entry(tree: &Tree, todo_list: TodoList) -> Result<()> {
-    // Serialize the todo list to raw data
-    let todo_data = serde_json::to_string(&todo_list)?;
-
-    // Create a new entry with this data in the "todos" subtree
-    let mut entry = eideticadb::entry::Entry::new_top_level(serde_json::to_string(
-        &eideticadb::data::KVOverWrite::new(),
-    )?);
-    entry.add_subtree("todos".to_string(), todo_data)?;
-
-    // Insert the entry into the tree
-    tree.insert(entry)?;
-
-    Ok(())
-}
-
-fn get_todo_list(tree: &Tree) -> Result<TodoList> {
-    // Get the todo list from the "todos" subtree
-    Ok(tree.get_subtree_data::<TodoList>("todos")?)
-}
-
 fn add_todo(tree: &Tree, title: String) -> Result<()> {
-    // Get the current todo list
-    let mut todo_list = get_todo_list(tree)?;
+    // Start an atomic operation
+    let op = tree.new_operation()?;
 
-    // Create a new todo and add it
+    // Get a handle to the 'todos' RowStore subtree
+    let todos_store = op.get_subtree::<RowStore<Todo>>("todos")?;
+
+    // Create a new todo
     let todo = Todo::new(title);
-    todo_list.add_todo(todo);
 
-    // Create a new entry with the updated todo list
-    let mut entry = eideticadb::entry::Entry::new(
-        tree.root_id().to_string(),
-        serde_json::to_string(&eideticadb::data::KVOverWrite::new())?,
-    );
+    // Insert the todo into the RowStore
+    // The RowStore will generate a unique ID for it
+    let todo_id = todos_store.insert(todo)?;
 
-    // Add the updated todo list to the entry
-    entry.add_subtree("todos".to_string(), serde_json::to_string(&todo_list)?)?;
+    // Commit the operation
+    op.commit()?;
 
-    // Set parents based on current tip entries
-    let tip_entries = tree.get_tip_entries()?;
-    let parent_ids = tip_entries.iter().map(|e| e.id()).collect();
-    entry.set_parents(parent_ids);
-
-    // Set subtree parents
-    let subtree_tip_entries = tree.get_subtree_tip_entries("todos")?;
-    let subtree_parent_ids = subtree_tip_entries.iter().map(|e| e.id()).collect();
-    entry.set_subtree_parents("todos", subtree_parent_ids);
-
-    // Insert the entry
-    tree.insert(entry)?;
+    println!("Added todo with ID: {}", todo_id);
 
     Ok(())
 }
 
 fn complete_todo(tree: &Tree, id: &str) -> Result<()> {
-    // Get the current todo list
-    let mut todo_list = get_todo_list(tree)?;
+    // Start an atomic operation
+    let op = tree.new_operation()?;
 
-    // Find the todo and mark it as complete
-    let todo = todo_list
-        .get_todo_mut(id)
-        .ok_or(anyhow!("Todo with ID {} not found", id))?;
+    // Get a handle to the 'todos' RowStore subtree
+    let todos_store = op.get_subtree::<RowStore<Todo>>("todos")?;
 
+    // Get the todo from the RowStore
+    let mut todo = match todos_store.get(id) {
+        Ok(todo) => todo,
+        Err(Error::NotFound) => return Err(anyhow!("Todo with ID {} not found", id)),
+        Err(e) => return Err(anyhow!("Error retrieving todo: {}", e)),
+    };
+
+    // Mark the todo as complete
     todo.complete();
 
-    // Create a new entry with the updated todo list
-    let mut entry = eideticadb::entry::Entry::new(
-        tree.root_id().to_string(),
-        serde_json::to_string(&eideticadb::data::KVOverWrite::new())?,
-    );
+    // Update the todo in the RowStore
+    todos_store.set(id, todo)?;
 
-    // Add the updated todo list to the entry
-    entry.add_subtree("todos".to_string(), serde_json::to_string(&todo_list)?)?;
-
-    // Set parents based on current tip entries
-    let tip_entries = tree.get_tip_entries()?;
-    let parent_ids = tip_entries.iter().map(|e| e.id()).collect();
-    entry.set_parents(parent_ids);
-
-    // Set subtree parents
-    let subtree_tip_entries = tree.get_subtree_tip_entries("todos")?;
-    let subtree_parent_ids = subtree_tip_entries.iter().map(|e| e.id()).collect();
-    entry.set_subtree_parents("todos", subtree_parent_ids);
-
-    // Insert the entry
-    tree.insert(entry)?;
+    // Commit the operation
+    op.commit()?;
 
     Ok(())
 }
 
 fn list_todos(tree: &Tree) -> Result<()> {
-    // Get the todo list
-    let todo_list = get_todo_list(tree)?;
+    // Start an atomic operation (for read-only)
+    let op = tree.new_operation()?;
 
-    // Get all todos and sort them by creation date
-    let mut todos: Vec<_> = todo_list.get_todos();
-    todos.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    // Get a handle to the 'todos' RowStore subtree
+    let todos_store = op.get_subtree::<RowStore<Todo>>("todos")?;
+
+    // Search for all todos (predicate always returns true)
+    let todos_with_ids = todos_store.search(|_| true)?;
 
     // Print the todos
-    if todos.is_empty() {
+    if todos_with_ids.is_empty() {
         println!("No tasks found.");
     } else {
         println!("Tasks:");
-        for todo in todos {
+        // Sort todos by creation date
+        let mut sorted_todos = todos_with_ids;
+        sorted_todos.sort_by(|(_, a), (_, b)| a.created_at.cmp(&b.created_at));
+
+        for (id, todo) in sorted_todos {
             let status = if todo.completed { "✓" } else { " " };
-            println!("[{}] {} (ID: {})", status, todo.title, todo.id);
+            println!("[{}] {} (ID: {})", status, todo.title, id);
         }
     }
 

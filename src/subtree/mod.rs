@@ -4,6 +4,9 @@ use crate::Result;
 mod kvstore;
 pub use kvstore::KVStore;
 
+mod rowstore;
+pub use rowstore::RowStore;
+
 /// A trait representing a named, CRDT-based data structure within a `Tree`.
 ///
 /// `SubTree` implementations define how data within a specific named partition of a `Tree`
