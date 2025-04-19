@@ -13,10 +13,12 @@
 //! * **CRDTs (`data::CRDT`)**: Conflict-free Replicated Data Types used for merging data from different entries, particularly for settings and subtree data.
 //! * **Merkle-CRDT**: The underlying principle combining Merkle DAGs (formed by entries and parent links) with CRDTs for efficient, decentralized data synchronization.
 
+pub mod atomicop;
 pub mod backend;
 pub mod basedb;
 pub mod data;
 pub mod entry;
+pub mod subtree;
 pub mod tree;
 
 /// Re-export the `Tree` struct for easier access.

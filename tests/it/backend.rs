@@ -82,7 +82,7 @@ fn test_in_memory_backend_subtree_operations() {
     let mut root_entry = Entry::new_top_level(root_data);
     let subtree_name = "subtree1";
     root_entry
-        .add_subtree(subtree_name.to_string(), "subtree_data".to_string())
+        .set_subtree_data(subtree_name.to_string(), "subtree_data".to_string())
         .unwrap();
     let root_id = root_entry.id();
     backend.put(root_entry).unwrap();
@@ -92,7 +92,7 @@ fn test_in_memory_backend_subtree_operations() {
     let mut child_entry = Entry::new(root_id.clone(), child_data);
     child_entry.set_parents(vec![root_id.clone()]);
     child_entry
-        .add_subtree(subtree_name.to_string(), "child_subtree_data".to_string())
+        .set_subtree_data(subtree_name.to_string(), "child_subtree_data".to_string())
         .unwrap();
     child_entry.set_subtree_parents(subtree_name, vec![root_id.clone()]);
     let child_id = child_entry.id();
@@ -248,9 +248,213 @@ fn test_in_memory_backend_complex_tree_structure() {
     backend.put(d_entry).unwrap();
 
     // Tips should now be D
-    let tips_result = backend.get_tips(&root_id);
-    assert!(tips_result.is_ok());
-    let tips = tips_result.unwrap();
-    assert_eq!(tips.len(), 1);
-    assert_eq!(tips[0], d_id);
+    let final_tips = backend.get_tips(&root_id).unwrap();
+    assert_eq!(final_tips.len(), 1);
+    assert_eq!(final_tips[0], d_id);
+}
+
+#[test]
+fn test_backend_get_tree_from_tips() {
+    let mut backend = InMemoryBackend::new();
+    let root_id = "tree_root".to_string();
+
+    // Create entries: root -> e1 -> e2a, e2b
+    let entry_root = Entry::new(root_id.clone(), "root_data".to_string());
+    let root_entry_id = entry_root.id();
+    backend.put(entry_root).unwrap();
+
+    let mut e1 = Entry::new(root_id.clone(), "e1_data".to_string());
+    e1.set_parents(vec![root_entry_id.clone()]);
+    let e1_id = e1.id();
+    backend.put(e1).unwrap();
+
+    let mut e2a = Entry::new(root_id.clone(), "e2a_data".to_string());
+    e2a.set_parents(vec![e1_id.clone()]);
+    let e2a_id = e2a.id();
+    backend.put(e2a).unwrap();
+
+    let mut e2b = Entry::new(root_id.clone(), "e2b_data".to_string());
+    e2b.set_parents(vec![e1_id.clone()]);
+    let e2b_id = e2b.id();
+    backend.put(e2b).unwrap();
+
+    // --- Test with single tip e2a ---
+    let tree_e2a = backend
+        .get_tree_from_tips(&root_id, &[e2a_id.clone()])
+        .expect("Failed to get tree from tip e2a");
+    assert_eq!(tree_e2a.len(), 3, "Tree from e2a should have root, e1, e2a");
+    let ids_e2a: Vec<_> = tree_e2a.iter().map(|e| e.id()).collect();
+    assert!(ids_e2a.contains(&root_entry_id));
+    assert!(ids_e2a.contains(&e1_id));
+    assert!(ids_e2a.contains(&e2a_id));
+    assert!(!ids_e2a.contains(&e2b_id)); // Should not contain e2b
+
+    // Verify topological order (root -> e1 -> e2a)
+    assert_eq!(tree_e2a[0].id(), root_entry_id);
+    assert_eq!(tree_e2a[1].id(), e1_id);
+    assert_eq!(tree_e2a[2].id(), e2a_id);
+
+    // --- Test with both tips e2a and e2b ---
+    let tree_both = backend
+        .get_tree_from_tips(&root_id, &[e2a_id.clone(), e2b_id.clone()])
+        .expect("Failed to get tree from tips e2a, e2b");
+    assert_eq!(
+        tree_both.len(),
+        4,
+        "Tree from both tips should have all 4 entries"
+    );
+    let ids_both: Vec<_> = tree_both.iter().map(|e| e.id()).collect();
+    assert!(ids_both.contains(&root_entry_id));
+    assert!(ids_both.contains(&e1_id));
+    assert!(ids_both.contains(&e2a_id));
+    assert!(ids_both.contains(&e2b_id));
+
+    // Verify topological order (root -> e1 -> {e2a, e2b})
+    assert_eq!(tree_both[0].id(), root_entry_id);
+    assert_eq!(tree_both[1].id(), e1_id);
+    // Order of e2a and e2b might vary, check they are last two
+    let last_two: Vec<_> = vec![tree_both[2].id(), tree_both[3].id()];
+    assert!(last_two.contains(&e2a_id));
+    assert!(last_two.contains(&e2b_id));
+
+    // --- Test with non-existent tip ---
+    let tree_bad_tip = backend
+        .get_tree_from_tips(&root_id, &["bad_tip_id".to_string()])
+        .expect("Failed to get tree with non-existent tip");
+    assert!(
+        tree_bad_tip.is_empty(),
+        "Getting tree from non-existent tip should return empty vector"
+    );
+
+    // --- Test with non-existent tree root ---
+    let bad_root_string = "bad_root".to_string();
+    let tree_bad_root = backend
+        .get_tree_from_tips(&bad_root_string, &[e1_id.clone()])
+        .expect("Failed to get tree with non-existent root");
+    assert!(
+        tree_bad_root.is_empty(),
+        "Getting tree from non-existent root should return empty vector"
+    );
+}
+
+#[test]
+fn test_backend_get_subtree_from_tips() {
+    let mut backend = InMemoryBackend::new();
+    let root_id_string = "tree_root".to_string();
+    let subtree_name_string = "my_subtree".to_string();
+
+    // Create entries: root -> e1 -> e2a, e2b
+    // root: has subtree
+    // e1: no subtree
+    // e2a: has subtree
+    // e2b: has subtree
+
+    let mut entry_root = Entry::new(root_id_string.clone(), "root_data".to_string());
+    entry_root
+        .set_subtree_data(subtree_name_string.clone(), "root_sub_data".to_string())
+        .unwrap();
+    let root_entry_id = entry_root.id();
+    backend.put(entry_root).unwrap();
+
+    let mut e1 = Entry::new(root_id_string.clone(), "e1_data".to_string()); // No subtree
+    e1.set_parents(vec![root_entry_id.clone()]);
+    let e1_id = e1.id();
+    backend.put(e1).unwrap();
+
+    let mut e2a = Entry::new(root_id_string.clone(), "e2a_data".to_string());
+    e2a.set_parents(vec![e1_id.clone()]);
+    e2a.set_subtree_data(subtree_name_string.clone(), "e2a_sub_data".to_string())
+        .unwrap();
+    e2a.set_subtree_parents(&subtree_name_string, vec![root_entry_id.clone()]);
+    let e2a_id = e2a.id();
+    backend.put(e2a).unwrap();
+
+    let mut e2b = Entry::new(root_id_string.clone(), "e2b_data".to_string());
+    e2b.set_parents(vec![e1_id.clone()]);
+    e2b.set_subtree_data(subtree_name_string.clone(), "e2b_sub_data".to_string())
+        .unwrap();
+    e2b.set_subtree_parents(&subtree_name_string, vec![root_entry_id.clone()]);
+    let e2b_id = e2b.id();
+    backend.put(e2b).unwrap();
+
+    // --- Test with single tip e2a ---
+    let subtree_e2a = backend
+        .get_subtree_from_tips(&root_id_string, &subtree_name_string, &[e2a_id.clone()])
+        .expect("Failed to get subtree from tip e2a");
+    // Should contain root and e2a (which have the subtree), but not e1 (no subtree) or e2b (not in history of tip e2a)
+    assert_eq!(
+        subtree_e2a.len(),
+        2,
+        "Subtree from e2a should have root, e2a"
+    );
+    let ids_e2a: Vec<_> = subtree_e2a.iter().map(|e| e.id()).collect();
+    assert!(ids_e2a.contains(&root_entry_id));
+    assert!(!ids_e2a.contains(&e1_id)); // e1 doesn't have the subtree
+    assert!(ids_e2a.contains(&e2a_id));
+    assert!(!ids_e2a.contains(&e2b_id)); // e2b is not an ancestor of e2a
+
+    // Verify topological order (root -> e2a)
+    assert_eq!(subtree_e2a[0].id(), root_entry_id);
+    assert_eq!(subtree_e2a[1].id(), e2a_id);
+
+    // --- Test with both tips e2a and e2b ---
+    let subtree_both = backend
+        .get_subtree_from_tips(
+            &root_id_string,
+            &subtree_name_string,
+            &[e2a_id.clone(), e2b_id.clone()],
+        )
+        .expect("Failed to get subtree from tips e2a, e2b");
+    // Should contain root, e2a, e2b (all have the subtree)
+    assert_eq!(
+        subtree_both.len(),
+        3,
+        "Subtree from both tips should have root, e2a, e2b"
+    );
+    let ids_both: Vec<_> = subtree_both.iter().map(|e| e.id()).collect();
+    assert!(ids_both.contains(&root_entry_id));
+    assert!(!ids_both.contains(&e1_id));
+    assert!(ids_both.contains(&e2a_id));
+    assert!(ids_both.contains(&e2b_id));
+
+    // Verify topological order (root -> {e2a, e2b})
+    assert_eq!(subtree_both[0].id(), root_entry_id);
+    let last_two: Vec<_> = vec![subtree_both[1].id(), subtree_both[2].id()];
+    assert!(last_two.contains(&e2a_id));
+    assert!(last_two.contains(&e2b_id));
+
+    // --- Test with non-existent subtree name ---
+    let bad_name_string = "bad_name".to_string();
+    let subtree_bad_name =
+        backend.get_subtree_from_tips(&root_id_string, &bad_name_string, &[e2a_id.clone()]);
+    assert!(
+        subtree_bad_name.is_ok(),
+        "Getting subtree with bad name should be ok..."
+    );
+    assert!(
+        subtree_bad_name.unwrap().is_empty(),
+        "...but return empty list"
+    );
+    // --- Test with non-existent tip ---
+    let subtree_bad_tip = backend
+        .get_subtree_from_tips(
+            &root_id_string,
+            &subtree_name_string,
+            &["bad_tip_id".to_string()],
+        )
+        .expect("Failed to get subtree with non-existent tip");
+    assert!(
+        subtree_bad_tip.is_empty(),
+        "Getting subtree from non-existent tip should return empty list"
+    );
+
+    // --- Test with non-existent tree root ---
+    let bad_root_string_2 = "bad_root".to_string();
+    let subtree_bad_root = backend
+        .get_subtree_from_tips(&bad_root_string_2, &subtree_name_string, &[e1_id.clone()])
+        .expect("Failed to get subtree with non-existent root");
+    assert!(
+        subtree_bad_root.is_empty(),
+        "Getting subtree from non-existent root should return empty list"
+    );
 }

@@ -32,11 +32,11 @@ fn test_entry_add_subtree() {
 
     let subtree_name = "subtree1";
     let subtree_data = "subtree_data".to_string();
-    let result = entry.add_subtree(subtree_name.to_string(), subtree_data.clone());
+    let result = entry.set_subtree_data(subtree_name.to_string(), subtree_data.clone());
     assert!(result.is_ok());
 
     // Verify subtree was added
-    let subtrees = entry.subtrees().unwrap();
+    let subtrees = entry.subtrees();
     assert_eq!(subtrees.len(), 1);
     assert_eq!(subtrees[0], subtree_name);
 
@@ -47,6 +47,19 @@ fn test_entry_add_subtree() {
     // Check subtree parents
     let subtree_parents = entry.subtree_parents(subtree_name).unwrap();
     assert!(subtree_parents.is_empty()); // New subtree has no parents initially
+
+    // ---- Test Overwrite ----
+    let new_subtree_data = "new_subtree_data".to_string();
+    let overwrite_result =
+        entry.set_subtree_data(subtree_name.to_string(), new_subtree_data.clone());
+    assert!(overwrite_result.is_ok());
+
+    // Verify count is still 1
+    assert_eq!(entry.subtrees().len(), 1);
+
+    // Verify data was overwritten
+    let fetched_new_data = entry.data(subtree_name).unwrap();
+    assert_eq!(fetched_new_data, &new_subtree_data);
 }
 
 #[test]
@@ -69,7 +82,7 @@ fn test_entry_parents() {
     let subtree_name = "subtree1";
     let subtree_data = "subtree_data".to_string();
     entry
-        .add_subtree(subtree_name.to_string(), subtree_data)
+        .set_subtree_data(subtree_name.to_string(), subtree_data)
         .unwrap();
 
     let subtree_parent = "subtree_parent".to_string();
@@ -108,7 +121,7 @@ fn test_in_tree_and_subtree() {
 
     let subtree_name = "subtree1";
     entry
-        .add_subtree(subtree_name.to_string(), "subtree_data".to_string())
+        .set_subtree_data(subtree_name.to_string(), "subtree_data".to_string())
         .unwrap();
 
     assert!(entry.in_subtree(subtree_name));
@@ -133,12 +146,12 @@ fn test_entry_with_multiple_subtrees() {
 
     for (name, data) in subtrees.iter() {
         entry
-            .add_subtree(name.to_string(), data.to_string())
+            .set_subtree_data(name.to_string(), data.to_string())
             .unwrap_or_else(|_| panic!("Failed to add subtree {}", name));
     }
 
     // Verify all subtrees were added
-    let subtree_names = entry.subtrees().unwrap();
+    let subtree_names = entry.subtrees();
     assert_eq!(subtree_names.len(), 4);
 
     // Verify each subtree has the right data
@@ -172,10 +185,10 @@ fn test_entry_id_determinism() {
     // Parents order should not matter
     entry1.set_parents(vec!["parent1".to_string(), "parent2".to_string()]);
     entry1
-        .add_subtree("subtree1".to_string(), "data1".to_string())
+        .set_subtree_data("subtree1".to_string(), "data1".to_string())
         .unwrap();
     entry1
-        .add_subtree("subtree2".to_string(), "data2".to_string())
+        .set_subtree_data("subtree2".to_string(), "data2".to_string())
         .unwrap();
     entry1.set_subtree_parents("subtree1", vec!["sub_parent1".to_string()]);
 
@@ -183,10 +196,10 @@ fn test_entry_id_determinism() {
     let mut entry2 = Entry::new("test_root".to_string(), "main_data".to_string());
     // Order of adding subtrees should not matter
     entry2
-        .add_subtree("subtree2".to_string(), "data2".to_string())
+        .set_subtree_data("subtree2".to_string(), "data2".to_string())
         .unwrap();
     entry2
-        .add_subtree("subtree1".to_string(), "data1".to_string())
+        .set_subtree_data("subtree1".to_string(), "data1".to_string())
         .unwrap();
     // Order of parents should not matter
     // Now using different order to test that the order of parents does not matter
@@ -202,4 +215,60 @@ fn test_entry_id_determinism() {
 
     // IDs should now be different
     assert_ne!(entry1.id(), entry3.id());
+}
+
+#[test]
+fn test_entry_remove_empty_subtrees() {
+    let root = "test_root".to_string();
+    let data = "test_data".to_string();
+    let mut entry = Entry::new(root, data);
+
+    // Add some subtrees, some with data, some without
+    entry
+        .set_subtree_data("sub1".to_string(), "data1".to_string())
+        .unwrap();
+    entry
+        .set_subtree_data("sub2_empty".to_string(), "".to_string())
+        .unwrap(); // Empty data
+    entry
+        .set_subtree_data("sub3".to_string(), "data3".to_string())
+        .unwrap();
+
+    assert_eq!(entry.subtrees().len(), 3);
+
+    // Call the cleanup method
+    assert!(entry.remove_empty_subtrees().is_ok());
+
+    // Verify empty subtree was removed
+    let remaining_subtrees = entry.subtrees();
+    assert_eq!(remaining_subtrees.len(), 2);
+    assert!(remaining_subtrees.contains(&"sub1".to_string()));
+    assert!(remaining_subtrees.contains(&"sub3".to_string()));
+    assert!(!remaining_subtrees.contains(&"sub2_empty".to_string()));
+
+    // Verify data of remaining subtrees is intact
+    assert_eq!(entry.data("sub1").unwrap(), "data1");
+    assert_eq!(entry.data("sub3").unwrap(), "data3");
+
+    // Test removing when all are non-empty
+    let mut entry_all_full = Entry::new("root2".to_string(), "data".to_string());
+    entry_all_full
+        .set_subtree_data("full1".to_string(), "data1".to_string())
+        .unwrap();
+    entry_all_full
+        .set_subtree_data("full2".to_string(), "data2".to_string())
+        .unwrap();
+    assert!(entry_all_full.remove_empty_subtrees().is_ok());
+    assert_eq!(entry_all_full.subtrees().len(), 2);
+
+    // Test removing when all are empty
+    let mut entry_all_empty = Entry::new("root3".to_string(), "data".to_string());
+    entry_all_empty
+        .set_subtree_data("empty1".to_string(), "".to_string())
+        .unwrap();
+    entry_all_empty
+        .set_subtree_data("empty2".to_string(), "".to_string())
+        .unwrap();
+    assert!(entry_all_empty.remove_empty_subtrees().is_ok());
+    assert!(entry_all_empty.subtrees().is_empty());
 }

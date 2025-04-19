@@ -4,7 +4,7 @@ use crate::Error;
 use crate::Result;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::Path;
 
@@ -115,7 +115,7 @@ impl InMemoryBackend {
 
         // Check if any other entry has this entry as its subtree parent
         for other_entry in self.entries.values() {
-            if other_entry.root() == tree && other_entry.in_subtree(subtree) {
+            if other_entry.in_tree(tree) && other_entry.in_subtree(subtree) {
                 if let Ok(parents) = other_entry.subtree_parents(subtree) {
                     if parents.contains(entry_id) {
                         return false; // Found a child in the subtree
@@ -128,77 +128,158 @@ impl InMemoryBackend {
 
     /// Calculates the height of each entry within a specified tree or subtree.
     ///
-    /// Height is defined as the length of the longest path from the tree/subtree root
-    /// to the entry. Entries with no parents (or the root itself) have height 0.
-    /// This is used for topological sorting.
+    /// Height is defined as the length of the longest path from a root node
+    /// (a node with no parents *within the specified context*) to the entry.
+    /// Root nodes themselves have height 0.
+    /// This calculation assumes the graph formed by the entries and their parent relationships
+    /// within the specified context forms a Directed Acyclic Graph (DAG).
     ///
     /// # Arguments
     /// * `tree` - The ID of the tree context.
     /// * `subtree` - An optional subtree name. If `Some`, calculates heights within
-    ///   that specific subtree. If `None`, calculates heights within the main tree.
+    ///   that specific subtree context. If `None`, calculates heights within the main tree context.
     ///
     /// # Returns
-    /// A `Result` containing a `HashMap` mapping entry IDs to their calculated height, or an error.
+    /// A `Result` containing a `HashMap` mapping entry IDs (within the context) to their
+    /// calculated height, or an error if data is inconsistent (e.g., parent references).
     fn calculate_heights(&self, tree: &ID, subtree: Option<&str>) -> Result<HashMap<ID, usize>> {
         let mut heights: HashMap<ID, usize> = HashMap::new();
+        let mut in_degree: HashMap<ID, usize> = HashMap::new();
+        // Map: parent_id -> list of child_ids *within the context*
+        let mut children_map: HashMap<ID, Vec<ID>> = HashMap::new();
+        // Keep track of all nodes actually in the context
+        let mut nodes_in_context: HashSet<ID> = HashSet::new();
 
-        // Collect all entries and their parents into a map
-        let mut parents_map: HashMap<ID, Vec<ID>> = HashMap::new();
+        // 1. Build graph structure (children_map, in_degree) for the context
         for (id, entry) in &self.entries {
-            // Check if the entry belongs to the tree or subtree we're interested in
-            let in_tree = match subtree {
+            // Check if entry is in the context (tree or tree+subtree)
+            let in_context = match subtree {
                 Some(subtree_name) => entry.in_tree(tree) && entry.in_subtree(subtree_name),
                 None => entry.in_tree(tree),
             };
-
-            if !in_tree {
+            if !in_context {
                 continue;
             }
 
-            // Get the appropriate parents based on whether we're in a subtree
+            nodes_in_context.insert(id.clone()); // Track node
+
+            // Get the relevant parents for this context
             let parents = match subtree {
                 Some(subtree_name) => entry.subtree_parents(subtree_name)?,
                 None => entry.parents()?,
             };
 
-            // Store the parents or an empty vector if there was an error
-            parents_map.insert(id.clone(), parents);
-        }
+            // Initialize in_degree for this node. It might be adjusted if parents are outside the context.
+            in_degree.insert(id.clone(), parents.len());
 
-        // Process entries in topological order
-        let mut to_visit: Vec<ID> = Vec::new();
+            // Populate children_map and adjust in_degree based on parent context
+            for parent_id in parents {
+                // Check if the parent is ALSO in the context
+                let parent_in_context =
+                    self.entries
+                        .get(&parent_id)
+                        .is_some_and(|p_entry| match subtree {
+                            Some(subtree_name) => {
+                                p_entry.in_tree(tree) && p_entry.in_subtree(subtree_name)
+                            }
+                            None => p_entry.in_tree(tree),
+                        });
 
-        // Start with the root node
-        if let Some(root_entry) = self.entries.get(tree) {
-            heights.insert(root_entry.id(), 0);
-            to_visit.push(root_entry.id());
-        }
-
-        // Handle entries with no parents (often this is just the root)
-        for (id, parents) in &parents_map {
-            if parents.is_empty() && !heights.contains_key(id) {
-                heights.insert(id.clone(), 0);
-                to_visit.push(id.clone());
-            }
-        }
-
-        // Process the queue
-        while let Some(current_id) = to_visit.pop() {
-            let current_height = *heights.get(&current_id).unwrap_or(&0);
-
-            // Find all entries that have this entry as a parent
-            for (child_id, parents) in &parents_map {
-                if parents.contains(&current_id) {
-                    let child_height = heights.get(child_id).cloned().unwrap_or(0);
-                    let new_height = current_height + 1;
-
-                    if new_height > child_height {
-                        heights.insert(child_id.clone(), new_height);
-                        to_visit.push(child_id.clone());
+                if parent_in_context {
+                    // Parent is in context, add edge to children_map
+                    children_map
+                        .entry(parent_id.clone())
+                        .or_default()
+                        .push(id.clone());
+                } else {
+                    // Parent is outside context, this edge doesn't count for in-degree *within* the context
+                    if let Some(d) = in_degree.get_mut(id) {
+                        *d = d.saturating_sub(1);
                     }
                 }
             }
         }
+
+        // 2. Initialize queue with root nodes (in-degree 0 within the context)
+        let mut queue: VecDeque<ID> = VecDeque::new();
+        for id in &nodes_in_context {
+            // Initialize all heights to 0, roots will start the propagation
+            heights.insert(id.clone(), 0);
+            let degree = in_degree.get(id).cloned().unwrap_or(0); // Get degree for this node
+            if degree == 0 {
+                // Nodes with 0 in-degree *within the context* are the roots for this calculation
+                queue.push_back(id.clone());
+                // Height is already set to 0
+            }
+        }
+
+        // 3. Process nodes using BFS (topological sort order)
+        let mut processed_nodes_count = 0;
+        while let Some(current_id) = queue.pop_front() {
+            processed_nodes_count += 1;
+            let current_height = *heights.get(&current_id).ok_or_else(|| {
+                Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!(
+                        "BFS height calculation: Height missing for node {}",
+                        current_id
+                    )
+                    .as_str(),
+                ))
+            })?;
+
+            // Process children within the context
+            if let Some(children) = children_map.get(&current_id) {
+                for child_id in children {
+                    // Child must be in context (redundant check if children_map built correctly, but safe)
+                    if !nodes_in_context.contains(child_id) {
+                        continue;
+                    }
+
+                    // Update child height: longest path = max(current paths)
+                    let new_height = current_height + 1;
+                    let child_current_height = heights.entry(child_id.clone()).or_insert(0); // Should exist, default 0
+                    *child_current_height = (*child_current_height).max(new_height);
+
+                    // Decrement in-degree and enqueue if it becomes 0
+                    if let Some(degree) = in_degree.get_mut(child_id) {
+                        // Only decrement degree if it's > 0
+                        if *degree > 0 {
+                            *degree -= 1;
+                            if *degree == 0 {
+                                queue.push_back(child_id.clone());
+                            }
+                        } else {
+                            // This indicates an issue: degree already 0 but node is being processed as child.
+                            return Err(Error::Io(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                format!("BFS height calculation: Negative in-degree detected for child {}", child_id).as_str()
+                            )));
+                        }
+                    } else {
+                        // This indicates an inconsistency: child_id was in children_map but not in_degree map
+                        return Err(Error::Io(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!(
+                                "BFS height calculation: In-degree missing for child {}",
+                                child_id
+                            )
+                            .as_str(),
+                        )));
+                    }
+                }
+            }
+        }
+
+        // 4. Check for cycles (if not all nodes were processed) - Assumes DAG
+        if processed_nodes_count != nodes_in_context.len() {
+            panic!("calculate_heights processed {} nodes, but found {} nodes in context. Potential cycle or disconnected graph portion detected.",
+                 processed_nodes_count, nodes_in_context.len()
+             );
+        }
+
+        // Ensure the final map only contains heights for nodes within the specified context
+        heights.retain(|id, _| nodes_in_context.contains(id));
 
         Ok(heights)
     }
@@ -229,7 +310,6 @@ impl InMemoryBackend {
         entries: &mut [Entry],
     ) -> Result<()> {
         let heights = self.calculate_heights(tree, Some(subtree))?;
-
         entries.sort_by(|a, b| {
             let a_height = *heights.get(&a.id()).unwrap_or(&0);
             let b_height = *heights.get(&b.id()).unwrap_or(&0);
@@ -271,7 +351,7 @@ impl Backend for InMemoryBackend {
     fn get_subtree_tips(&self, tree: &ID, subtree: &str) -> Result<Vec<ID>> {
         let mut tips = Vec::new();
         for (id, entry) in &self.entries {
-            if entry.root() == tree
+            if entry.in_tree(tree)
                 && entry.in_subtree(subtree)
                 && self.is_subtree_tip(tree, subtree, id)
             {
@@ -328,6 +408,91 @@ impl Backend for InMemoryBackend {
         self.sort_entries_by_subtree_height(tree, subtree, &mut entries)?;
 
         Ok(entries)
+    }
+
+    /// Retrieves all entries belonging to a specific tree up to the given tips, sorted topologically.
+    ///
+    /// This implementation collects all ancestors of the provided tips that are part of the specified tree,
+    /// then sorts them topologically.
+    fn get_tree_from_tips(&self, tree: &ID, tips: &[ID]) -> Result<Vec<Entry>> {
+        // If no tips provided, return empty result
+        if tips.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Collect all ancestors of the provided tips
+        let mut entries_to_include = HashMap::new();
+        let mut to_process = tips.to_vec();
+
+        while let Some(current_id) = to_process.pop() {
+            // Skip if we've already processed this ID
+            if entries_to_include.contains_key(&current_id) {
+                continue;
+            }
+
+            // Get the entry
+            if let Some(entry) = self.entries.get(&current_id) {
+                // Only include if it's part of the specified tree
+                if entry.in_tree(tree) {
+                    // Add to our result set
+                    entries_to_include.insert(current_id.clone(), entry.clone());
+
+                    // Add its parents to the processing queue
+                    if let Ok(parents) = entry.parents() {
+                        to_process.extend(parents);
+                    }
+                }
+            }
+        }
+
+        // Convert to vector and sort topologically
+        let mut result: Vec<Entry> = entries_to_include.values().cloned().collect();
+        self.sort_entries_by_height(tree, &mut result)?;
+
+        Ok(result)
+    }
+
+    /// Retrieves all entries belonging to a specific subtree within a tree up to the given tips,
+    /// sorted topologically.
+    ///
+    /// This implementation collects all ancestors of the provided subtree tips that are part of
+    /// the specified subtree, then sorts them topologically by subtree height.
+    fn get_subtree_from_tips(&self, tree: &ID, subtree: &str, tips: &[ID]) -> Result<Vec<Entry>> {
+        // If no tips provided, return empty result
+        if tips.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Collect all ancestors of the provided tips within the subtree
+        let mut entries_to_include = HashMap::new();
+        let mut to_process = tips.to_vec();
+
+        while let Some(current_id) = to_process.pop() {
+            // Skip if we've already processed this ID
+            if entries_to_include.contains_key(&current_id) {
+                continue;
+            }
+
+            // Get the entry
+            if let Some(entry) = self.entries.get(&current_id) {
+                // Only include if it's part of the specified tree and subtree
+                if entry.in_tree(tree) && entry.in_subtree(subtree) {
+                    // Add to our result set
+                    entries_to_include.insert(current_id.clone(), entry.clone());
+
+                    // Add its subtree parents to the processing queue
+                    if let Ok(subtree_parents) = entry.subtree_parents(subtree) {
+                        to_process.extend(subtree_parents);
+                    }
+                }
+            }
+        }
+
+        // Convert to vector and sort topologically by subtree height
+        let mut result: Vec<Entry> = entries_to_include.values().cloned().collect();
+        self.sort_entries_by_subtree_height(tree, subtree, &mut result)?;
+
+        Ok(result)
     }
 }
 
@@ -582,7 +747,7 @@ mod tests {
         let mut with_subtree = Entry::new_top_level("{\"key\":\"with_subtree\"}".to_string());
         let subtree_data = "{\"subtree_key\":\"subtree_value\"}".to_string();
         with_subtree
-            .add_subtree("custom_subtree".to_string(), subtree_data)
+            .set_subtree_data("custom_subtree".to_string(), subtree_data)
             .unwrap();
         let with_subtree_id = with_subtree.id();
 
@@ -628,7 +793,7 @@ mod tests {
             "Entry with_subtree should be root"
         );
         assert_eq!(
-            loaded_with_subtree.subtrees()?.len(),
+            loaded_with_subtree.subtrees().len(),
             2,
             "Should have 2 subtrees: root, custom_subtree"
         );
@@ -706,7 +871,7 @@ mod tests {
         // Entry 1 - parent in the subtree
         let mut entry1 = Entry::new(root_id.clone(), "{}".to_string());
         entry1
-            .add_subtree(subtree_name.clone(), "{}".to_string())
+            .set_subtree_data(subtree_name.clone(), "{}".to_string())
             .unwrap();
         let id1 = entry1.id();
         backend.put(entry1.clone())?;
@@ -714,7 +879,7 @@ mod tests {
         // Entry 2 - child of 1 in subtree
         let mut entry2 = Entry::new(root_id.clone(), "{}".to_string());
         entry2
-            .add_subtree(subtree_name.clone(), "{}".to_string())
+            .set_subtree_data(subtree_name.clone(), "{}".to_string())
             .unwrap();
         entry2.set_parents(vec![id1.clone()]);
         entry2.set_subtree_parents(&subtree_name, vec![id1.clone()]);
@@ -724,7 +889,7 @@ mod tests {
         // Entry 3 - also child of 1 in subtree (branch)
         let mut entry3 = Entry::new(root_id.clone(), "{}".to_string());
         entry3
-            .add_subtree(subtree_name.clone(), "{}".to_string())
+            .set_subtree_data(subtree_name.clone(), "{}".to_string())
             .unwrap();
         entry3.set_parents(vec![id1.clone()]);
         entry3.set_subtree_parents(&subtree_name, vec![id1.clone()]);
@@ -743,8 +908,8 @@ mod tests {
         // Adapt the test assertions to match the actual behavior
         // For entries that are in the subtree, check they're included
         assert!(
-            tips.contains(&id1) || (tips.contains(&id2) && tips.contains(&id3)),
-            "Tips should either include entry1, or both entry2 and entry3"
+            tips.contains(&id2) && tips.contains(&id3),
+            "Tips should include both entry2 and entry3"
         );
 
         // Entry 4 should not be in the subtree tips
@@ -765,7 +930,7 @@ mod tests {
         // Entry 1 (in subtree A)
         let mut entry1 = Entry::new(root_id.clone(), "{}".to_string());
         entry1
-            .add_subtree(subtree_a.clone(), "{}".to_string())
+            .set_subtree_data(subtree_a.clone(), "{}".to_string())
             .unwrap();
         let id1 = entry1.id();
         backend.put(entry1.clone())?;
@@ -773,14 +938,14 @@ mod tests {
         // Entry 2 (in subtree B)
         let mut entry2 = Entry::new(root_id.clone(), "{}".to_string());
         entry2
-            .add_subtree("subtree_B".to_string(), "{}".to_string())
+            .set_subtree_data("subtree_B".to_string(), "{}".to_string())
             .unwrap();
         backend.put(entry2.clone())?;
 
         // Entry 3 (in subtree A, child of 1)
         let mut entry3 = Entry::new(root_id.clone(), "{}".to_string());
         entry3
-            .add_subtree(subtree_a.clone(), "{}".to_string())
+            .set_subtree_data(subtree_a.clone(), "{}".to_string())
             .unwrap();
         entry3.set_parents(vec![id1.clone()]);
         entry3.set_subtree_parents(&subtree_a, vec![id1.clone()]);
@@ -802,7 +967,7 @@ mod tests {
         // Entry 1 (root A)
         let mut entry1 = Entry::new_top_level("{}".to_string());
         entry1
-            .add_subtree("data".to_string(), "{}".to_string())
+            .set_subtree_data("data".to_string(), "{}".to_string())
             .unwrap();
         let id1 = entry1.id();
         backend.put(entry1.clone())?;
@@ -837,7 +1002,7 @@ mod tests {
         // Add some data
         let mut entry1 = Entry::new("root1".to_string(), "{}".to_string());
         entry1
-            .add_subtree("sub1".to_string(), "{\"key\":\"value1\"}".to_string())
+            .set_subtree_data("sub1".to_string(), "{\"key\":\"value1\"}".to_string())
             .unwrap();
         let id1 = entry1.id();
         backend.put(entry1.clone())?;
@@ -953,7 +1118,7 @@ mod tests {
         // Entry A in subtree "alpha"
         let mut entry_a = Entry::new(root_id.clone(), "{}".to_string());
         entry_a
-            .add_subtree("alpha".to_string(), "{\"key\":\"a\"}".to_string())
+            .set_subtree_data("alpha".to_string(), "{\"key\":\"a\"}".to_string())
             .unwrap();
         entry_a.set_parents(vec![root_id.clone()]);
         let id_a = entry_a.id();
@@ -961,7 +1126,7 @@ mod tests {
         // Entry B in subtree "alpha" (child of A in alpha)
         let mut entry_b = Entry::new(root_id.clone(), "{}".to_string());
         entry_b
-            .add_subtree("alpha".to_string(), "{\"key\":\"b\"}".to_string())
+            .set_subtree_data("alpha".to_string(), "{\"key\":\"b\"}".to_string())
             .unwrap();
         entry_b.set_parents(vec![id_a.clone()]);
         entry_b.set_subtree_parents("alpha", vec![id_a.clone()]);
@@ -969,17 +1134,17 @@ mod tests {
         // Entry C in subtree "beta" only
         let mut entry_c = Entry::new(root_id.clone(), "{}".to_string());
         entry_c
-            .add_subtree("beta".to_string(), "{\"key\":\"c\"}".to_string())
+            .set_subtree_data("beta".to_string(), "{\"key\":\"c\"}".to_string())
             .unwrap();
         entry_c.set_parents(vec![entry_b.id().clone()]);
 
         // Entry D in both subtrees (no parent in alpha)
         let mut entry_d = Entry::new(root_id.clone(), "{}".to_string());
         entry_d
-            .add_subtree("alpha".to_string(), "{\"key\":\"d\"}".to_string())
+            .set_subtree_data("alpha".to_string(), "{\"key\":\"d\"}".to_string())
             .unwrap();
         entry_d
-            .add_subtree("beta".to_string(), "{\"key\":\"d-beta\"}".to_string())
+            .set_subtree_data("beta".to_string(), "{\"key\":\"d-beta\"}".to_string())
             .unwrap();
         entry_d.set_parents(vec![entry_c.id().clone()]);
         entry_d.set_subtree_parents("alpha", vec![entry_b.id().clone()]);
@@ -1016,6 +1181,99 @@ mod tests {
         let beta_ids: Vec<ID> = beta_subtree.iter().map(|e| e.id()).collect();
         assert_eq!(beta_ids[0], entry_c.id());
         assert_eq!(beta_ids[1], entry_d.id());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_calculate_subtree_height() -> Result<()> {
+        let mut backend = InMemoryBackend::new();
+        let subtree_name = "sub";
+
+        // Create root entry
+        let root = Entry::new_top_level("{}".to_string());
+        let root_id = root.id();
+        backend.put(root.clone())?;
+
+        // Create entries
+        let mut entry_a = Entry::new(root_id.clone(), "A".to_string());
+        entry_a.set_parents(vec![root_id.clone()]);
+        let entry_a_id = entry_a.id();
+        backend.put(entry_a.clone())?;
+
+        // B: In subtree "sub", main parent A, no parent in "sub" -> height 0 in "sub"
+        let mut entry_b = Entry::new(root_id.clone(), "B".to_string());
+        entry_b.set_parents(vec![entry_a_id.clone()]);
+        entry_b.set_subtree_data(subtree_name.to_string(), "B_sub".to_string())?;
+        let entry_b_id = entry_b.id();
+        backend.put(entry_b.clone())?;
+
+        // C: In subtree "sub", main parent B, parent B in "sub" -> height 1 in "sub"
+        let mut entry_c = Entry::new(root_id.clone(), "C".to_string());
+        entry_c.set_parents(vec![entry_b_id.clone()]);
+        entry_c.set_subtree_data(subtree_name.to_string(), "C_sub".to_string())?;
+        entry_c.set_subtree_parents(subtree_name, vec![entry_b_id.clone()]);
+        let entry_c_id = entry_c.id();
+        backend.put(entry_c.clone())?;
+
+        // D: In subtree "sub", main parent C, parent C in "sub" -> height 2 in "sub"
+        let mut entry_d = Entry::new(root_id.clone(), "D".to_string());
+        entry_d.set_parents(vec![entry_c_id.clone()]);
+        entry_d.set_subtree_data(subtree_name.to_string(), "D_sub".to_string())?;
+        entry_d.set_subtree_parents(subtree_name, vec![entry_c_id.clone()]);
+        let entry_d_id = entry_d.id();
+        backend.put(entry_d.clone())?;
+
+        // E: NOT in subtree "sub", main parent C -> should be ignored
+        let mut entry_e = Entry::new(root_id.clone(), "E".to_string());
+        entry_e.set_parents(vec![entry_c_id.clone()]);
+        let entry_e_id = entry_e.id();
+        backend.put(entry_e.clone())?;
+
+        // Calculate heights within the subtree
+        let heights = backend.calculate_heights(&root_id, Some(subtree_name))?;
+
+        println!("Subtree Heights: {:?}", heights);
+
+        // Assertions
+        // Root and A should not be present as they are not explicitly in the subtree context
+        assert!(
+            !heights.contains_key(&root_id),
+            "Root should not be in subtree height map"
+        );
+        assert!(
+            !heights.contains_key(&entry_a_id),
+            "Entry A should not be in subtree height map"
+        );
+        // E should not be present
+        assert!(
+            !heights.contains_key(&entry_e_id),
+            "Entry E should not be in subtree height map"
+        );
+
+        // B, C, D should be present with correct heights
+        assert_eq!(
+            heights.get(&entry_b_id),
+            Some(&0),
+            "Entry B height mismatch"
+        );
+        assert_eq!(
+            heights.get(&entry_c_id),
+            Some(&1),
+            "Entry C height mismatch"
+        );
+        assert_eq!(
+            heights.get(&entry_d_id),
+            Some(&2),
+            "Entry D height mismatch"
+        );
+
+        // Check total size
+        assert_eq!(
+            heights.len(),
+            3,
+            "Incorrect number of entries in subtree height map"
+        );
 
         Ok(())
     }

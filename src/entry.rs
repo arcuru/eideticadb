@@ -93,7 +93,7 @@ impl Entry {
         entry.tree.data = data;
         // Add a subtree with the name "root" to mark this as a root entry
         entry
-            .add_subtree("root".to_string(), "{}".to_string())
+            .set_subtree_data("root".to_string(), "{}".to_string())
             .unwrap();
         entry
     }
@@ -110,7 +110,7 @@ impl Entry {
         parents.sort();
     }
 
-    /// Add data for a named subtree to this entry.
+    /// Sets data for a named subtree to this entry, creating it if it doesn't exist.
     ///
     /// If an entry contributes data to a specific domain or table, it's added via a `SubTreeNode`.
     /// Subtrees are automatically kept sorted by name.
@@ -118,21 +118,20 @@ impl Entry {
     /// # Arguments
     /// * `name` - The name of the subtree (e.g., "users", "products").
     /// * `data` - `RawData` (serialized string) specific to this entry for the named subtree.
-    ///
-    /// # Errors
-    /// Returns `Error::AlreadyExists` if a subtree with the given name already exists in this entry.
-    pub fn add_subtree(&mut self, name: String, data: RawData) -> Result<()> {
-        // Verify that the subtree does not already exist
-        if self.subtrees.iter().any(|node| node.name == name) {
-            return Err(Error::AlreadyExists);
+    pub fn set_subtree_data(&mut self, name: String, data: RawData) -> Result<()> {
+        if let Some(node) = self.subtrees.iter_mut().find(|node| node.name == name) {
+            // Update data in existing SubTreeNode while preserving parents
+            node.data = data;
+        } else {
+            // Create new SubTreeNode if it doesn't exist
+            self.subtrees.push(SubTreeNode {
+                name,
+                data,
+                parents: vec![],
+            });
+            // Sort subtrees by name
+            self.sort_subtrees();
         }
-        self.subtrees.push(SubTreeNode {
-            name,
-            data,
-            parents: vec![],
-        });
-        // Sort subtrees by name
-        self.sort_subtrees();
         Ok(())
     }
 
@@ -187,19 +186,21 @@ impl Entry {
 
     /// Get the names of all subtrees this entry contains data for.
     /// The names are returned in alphabetical order.
-    pub fn subtrees(&self) -> Result<Vec<String>> {
-        if self.subtrees.is_empty() {
-            return Err(Error::NotFound);
-        }
-        Ok(self
-            .subtrees
+    pub fn subtrees(&self) -> Vec<String> {
+        self.subtrees
             .iter()
             .map(|subtree| subtree.name.clone())
-            .collect())
+            .collect()
+    }
+
+    /// Remove subtrees that do not have any data.
+    pub fn remove_empty_subtrees(&mut self) -> Result<()> {
+        self.subtrees.retain(|subtree| !subtree.data.is_empty());
+        Ok(())
     }
 
     /// Get the `RawData` associated with the main tree node (`tree.data`).
-    /// Often used for tree settings or metadata.
+    /// This is not the same as the "settings" subtree data.
     pub fn get_settings(&self) -> Result<RawData> {
         Ok(self.tree.data.clone())
     }
@@ -258,12 +259,11 @@ impl Entry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Error;
 
     #[test]
     fn test_add_subtree_success() {
         let mut entry = Entry::new("root_id".to_string(), "{}".to_string());
-        let result = entry.add_subtree("my_subtree".to_string(), "{}".to_string());
+        let result = entry.set_subtree_data("my_subtree".to_string(), "{}".to_string());
         assert!(result.is_ok());
         assert!(entry.in_subtree("my_subtree"));
         assert_eq!(entry.subtrees.len(), 1);
@@ -274,21 +274,39 @@ mod tests {
         let mut entry = Entry::new("root_id".to_string(), "{}".to_string());
         // Add first time
         entry
-            .add_subtree("my_subtree".to_string(), "{}".to_string())
+            .set_subtree_data(
+                "my_subtree".to_string(),
+                "{\"initial\":\"data\"}".to_string(),
+            )
             .expect("First add should succeed");
+        let parents = vec!["parent1".to_string(), "parent2".to_string()];
+        entry.set_subtree_parents("my_subtree", parents.clone());
 
-        // Try adding again
-        let result = entry.add_subtree("my_subtree".to_string(), "{}".to_string());
+        // Ensure initial data is correct
+        assert_eq!(entry.subtrees.len(), 1);
+        assert_eq!(entry.data("my_subtree").unwrap(), "{\"initial\":\"data\"}");
+        assert_eq!(entry.subtree_parents("my_subtree").unwrap(), parents);
 
-        // Assert error is AlreadyExists
-        match result {
-            Err(Error::AlreadyExists) => { /* Expected error */ }
-            Ok(_) => panic!("Adding duplicate subtree should have failed"),
-            Err(e) => panic!("Unexpected error type: {:?}", e),
-        }
+        // Try adding again with new data
+        let result = entry.set_subtree_data(
+            "my_subtree".to_string(),
+            "{\"updated\":\"data\"}".to_string(),
+        );
+
+        // Assert success and overwriting behavior
+        assert!(
+            result.is_ok(),
+            "Adding duplicate subtree should succeed with overwrite behavior"
+        );
 
         // Ensure only one subtree exists
         assert_eq!(entry.subtrees.len(), 1);
+
+        // Ensure the data has been updated
+        assert_eq!(entry.data("my_subtree").unwrap(), "{\"updated\":\"data\"}");
+
+        // Ensure the parents have stayed the same
+        assert_eq!(entry.subtree_parents("my_subtree").unwrap(), parents);
     }
 
     #[test]
@@ -297,13 +315,13 @@ mod tests {
 
         // Add subtrees in non-alphabetical order
         entry
-            .add_subtree("z_subtree".to_string(), "{}".to_string())
+            .set_subtree_data("z_subtree".to_string(), "{}".to_string())
             .unwrap();
         entry
-            .add_subtree("a_subtree".to_string(), "{}".to_string())
+            .set_subtree_data("a_subtree".to_string(), "{}".to_string())
             .unwrap();
         entry
-            .add_subtree("m_subtree".to_string(), "{}".to_string())
+            .set_subtree_data("m_subtree".to_string(), "{}".to_string())
             .unwrap();
 
         // Verify subtrees are stored in alphabetical order
@@ -313,7 +331,7 @@ mod tests {
         assert_eq!(entry.subtrees[2].name, "z_subtree");
 
         // Verify subtrees() method returns them in sorted order too
-        let subtree_names = entry.subtrees().unwrap();
+        let subtree_names = entry.subtrees();
         assert_eq!(subtree_names, vec!["a_subtree", "m_subtree", "z_subtree"]);
     }
 
@@ -337,7 +355,7 @@ mod tests {
 
         // Test subtree parents sorting
         entry
-            .add_subtree("test_subtree".to_string(), "{}".to_string())
+            .set_subtree_data("test_subtree".to_string(), "{}".to_string())
             .unwrap();
         entry.set_subtree_parents(
             "test_subtree",

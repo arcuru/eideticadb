@@ -126,4 +126,33 @@ pub trait Backend: Send + Sync + Any {
     /// A `Result` containing a vector of all `Entry` objects in the subtree,
     /// sorted topologically according to their position within the subtree, or an error.
     fn get_subtree(&self, tree: &ID, subtree: &str) -> Result<Vec<Entry>>;
+
+    /// Retrieves all entries belonging to a specific tree up to the given tips, sorted topologically.
+    ///
+    /// Similar to `get_tree`, but only includes entries that are ancestors of the provided tips.
+    /// This allows reading from a specific state of the tree defined by those tips.
+    ///
+    /// # Arguments
+    /// * `tree` - The root ID of the tree to retrieve.
+    /// * `tips` - The tip IDs defining the state to read from.
+    ///
+    /// # Returns
+    /// A `Result` containing a vector of `Entry` objects in the tree up to the given tips,
+    /// sorted topologically, or an error.
+    fn get_tree_from_tips(&self, tree: &ID, tips: &[ID]) -> Result<Vec<Entry>>;
+
+    /// Retrieves all entries belonging to a specific subtree within a tree up to the given tips, sorted topologically.
+    ///
+    /// Similar to `get_subtree`, but only includes entries that are ancestors of the provided subtree tips.
+    /// This allows reading from a specific state of the subtree defined by those tips.
+    ///
+    /// # Arguments
+    /// * `tree` - The root ID of the parent tree.
+    /// * `subtree` - The name of the subtree to retrieve.
+    /// * `tips` - The tip IDs defining the state to read from.
+    ///
+    /// # Returns
+    /// A `Result` containing a vector of `Entry` objects in the subtree up to the given tips,
+    /// sorted topologically, or an error.
+    fn get_subtree_from_tips(&self, tree: &ID, subtree: &str, tips: &[ID]) -> Result<Vec<Entry>>;
 }

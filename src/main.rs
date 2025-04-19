@@ -240,7 +240,7 @@ fn print_help() {
 fn print_entry(entry: &Entry) {
     println!("  ID: {}", entry.id());
     println!("  Root: {}", entry.root());
-    for subtree in entry.subtrees().unwrap() {
+    for subtree in entry.subtrees() {
         println!("  Subtree: {}", subtree);
         println!("    Data:");
         println!("      {}", entry.get_settings().unwrap());

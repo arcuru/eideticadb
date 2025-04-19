@@ -1,7 +1,8 @@
+use eideticadb::backend::Backend;
 use eideticadb::backend::InMemoryBackend;
 use eideticadb::basedb::BaseDB;
 use eideticadb::data::KVOverWrite;
-use eideticadb::entry::Entry;
+use eideticadb::subtree::KVStore;
 
 #[test]
 fn test_new_db_and_tree() {
@@ -54,128 +55,100 @@ fn test_all_trees() {
 
 #[test]
 fn test_get_backend() {
-    let backend = Box::new(InMemoryBackend::new());
-    // It might be useful to get the backend's ID or some state later
-    // let backend_ptr = backend.as_ref() as *const _;
+    let backend: Box<dyn Backend> = Box::new(InMemoryBackend::new());
     let db = BaseDB::new(backend);
 
     let retrieved_backend = db.backend();
-    // How to assert this is the same backend?
-    // We could try adding a method to the backend trait or specific implementations
-    // For now, just check it's not None implicitly by using it.
     assert!(retrieved_backend.lock().unwrap().all_roots().is_ok());
 }
 
 #[test]
-fn test_trees_with_custom_settings() {
-    let backend = Box::new(InMemoryBackend::new());
+fn test_create_tree_with_initial_settings() {
+    let backend: Box<dyn Backend> = Box::new(InMemoryBackend::new());
     let db = BaseDB::new(backend);
 
-    // Create a tree with custom settings
-    let mut settings1 = KVOverWrite::new();
-    settings1.set("name".to_string(), "Tree1".to_string());
-    settings1.set("description".to_string(), "First test tree".to_string());
-    settings1.set("version".to_string(), "1.0".to_string());
+    let mut settings = KVOverWrite::new();
+    settings.set("name".to_string(), "My Settings Tree".to_string());
+    settings.set("version".to_string(), "1.0".to_string());
 
-    let tree1 = db
-        .new_tree(settings1)
-        .expect("Failed to create tree with custom settings");
+    let tree = db.new_tree(settings).expect("Failed to create tree");
 
-    // Verify the settings were saved correctly
-    let loaded_settings = tree1.get_settings().expect("Failed to get settings");
-    assert_eq!(loaded_settings.get("name"), Some(&"Tree1".to_string()));
+    let settings_viewer = tree
+        .get_subtree_viewer::<KVStore>("settings")
+        .expect("Failed to get settings viewer");
+
     assert_eq!(
-        loaded_settings.get("description"),
-        Some(&"First test tree".to_string())
+        settings_viewer
+            .get("name")
+            .expect("Failed to get name setting"),
+        "My Settings Tree"
     );
-    assert_eq!(loaded_settings.get("version"), Some(&"1.0".to_string()));
-    assert_eq!(loaded_settings.get("name").unwrap(), "Tree1");
+    assert_eq!(
+        settings_viewer
+            .get("version")
+            .expect("Failed to get version setting"),
+        "1.0"
+    );
 
-    // Test loading the tree by ID
-    let root_id = tree1.root_id().clone();
-    let loaded_tree = db.load_tree(&root_id).expect("Failed to load tree");
-
-    // Use the same approach as above
-    let loaded_settings = loaded_tree
-        .get_settings()
-        .expect("Failed to get settings from loaded tree");
-    assert_eq!(loaded_settings.get("name").unwrap(), "Tree1");
+    assert_eq!(
+        tree.get_name().expect("Failed to get tree name"),
+        "My Settings Tree"
+    );
 }
 
 #[test]
-fn test_tree_subtree_operations() {
-    let backend = Box::new(InMemoryBackend::new());
+fn test_basic_subtree_modification() {
+    let backend: Box<dyn Backend> = Box::new(InMemoryBackend::new());
     let db = BaseDB::new(backend);
-
-    // Create a tree with default settings
     let settings = KVOverWrite::new();
     let tree = db.new_tree(settings).expect("Failed to create tree");
 
-    // Create an entry with subtrees
-    let mut entry = Entry::new_top_level("main data".to_string());
-    entry
-        .add_subtree(
-            "users".to_string(),
-            r#"{"data": {"user1": {"name": "Alice"}}}"#.to_string(),
-        )
-        .expect("Failed to add users subtree");
-    entry
-        .add_subtree(
-            "posts".to_string(),
-            r#"{"data": {"post1": {"title": "Hello"}}}"#.to_string(),
-        )
-        .expect("Failed to add posts subtree");
+    let op = tree.new_operation().expect("Failed to start operation");
+    {
+        let data_store = op
+            .get_subtree::<KVStore>("user_data")
+            .expect("Failed to get data subtree");
 
-    // Insert the entry into the tree
-    let id = tree.insert(entry).expect("Failed to insert entry");
+        data_store
+            .set("user_id", "alice")
+            .expect("Failed to set user_id");
+        data_store
+            .set("email", "alice@example.com")
+            .expect("Failed to set email");
+    }
 
-    // Get subtree tips
-    let user_tips = tree
-        .get_subtree_tips("users")
-        .expect("Failed to get users subtree tips");
-    let post_tips = tree
-        .get_subtree_tips("posts")
-        .expect("Failed to get posts subtree tips");
+    let commit_result = op.commit();
+    assert!(
+        commit_result.is_ok(),
+        "Commit failed: {:?}",
+        commit_result.err()
+    );
+    let new_tip_id = commit_result.unwrap();
+    assert_ne!(
+        new_tip_id,
+        *tree.root_id(),
+        "Commit should create a new tip"
+    );
 
-    assert_eq!(user_tips.len(), 1);
-    assert_eq!(post_tips.len(), 1);
-    assert_eq!(user_tips[0], id);
-    assert_eq!(post_tips[0], id);
+    let data_viewer = tree
+        .get_subtree_viewer::<KVStore>("user_data")
+        .expect("Failed to get data viewer after commit");
 
-    // Get subtree entries
-    let user_entries = tree
-        .get_subtree_tip_entries("users")
-        .expect("Failed to get users subtree entries");
-    let post_entries = tree
-        .get_subtree_tip_entries("posts")
-        .expect("Failed to get posts subtree entries");
+    assert_eq!(
+        data_viewer
+            .get("user_id")
+            .expect("Failed to get user_id after commit"),
+        "alice"
+    );
+    assert_eq!(
+        data_viewer
+            .get("email")
+            .expect("Failed to get email after commit"),
+        "alice@example.com"
+    );
 
-    assert_eq!(user_entries.len(), 1);
-    assert_eq!(post_entries.len(), 1);
-
-    // Add a new entry with updated data for one subtree
-    let mut new_entry = Entry::new(tree.root_id().clone(), "updated main data".to_string());
-    new_entry
-        .add_subtree(
-            "users".to_string(),
-            r#"{"data": {"user1": {"name": "Alice"}, "user2": {"name": "Bob"}}}"#.to_string(),
-        )
-        .expect("Failed to add updated users subtree");
-
-    // Insert the new entry
-    let new_id = tree.insert(new_entry).expect("Failed to insert new entry");
-
-    // Verify users subtree tip has been updated
-    let updated_user_tips = tree
-        .get_subtree_tips("users")
-        .expect("Failed to get updated users subtree tips");
-    assert_eq!(updated_user_tips.len(), 1);
-    assert_eq!(updated_user_tips[0], new_id);
-
-    // But posts subtree tip should remain the same
-    let unchanged_post_tips = tree
-        .get_subtree_tips("posts")
-        .expect("Failed to get unchanged posts subtree tips");
-    assert_eq!(unchanged_post_tips.len(), 1);
-    assert_eq!(unchanged_post_tips[0], id); // Still pointing to the original entry
+    match data_viewer.get("non_existent_key") {
+        Err(eideticadb::Error::NotFound) => (),
+        other => panic!("Expected NotFound error, got {:?}", other),
+    }
 }
