@@ -8,7 +8,7 @@ use crate::backend::Backend;
 use crate::data::KVOverWrite;
 use crate::entry::ID;
 use crate::tree::Tree;
-use crate::Result;
+use crate::{Error, Result};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 /// Database implementation on top of the backend.
@@ -39,7 +39,7 @@ impl BaseDB {
     /// Helper function to lock the backend mutex.
     fn lock_backend(&self) -> Result<MutexGuard<'_, Box<dyn Backend>>> {
         self.backend.lock().map_err(|_| {
-            crate::Error::Io(std::io::Error::new(
+            Error::Io(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 "Failed to lock backend",
             ))
@@ -102,6 +102,41 @@ impl BaseDB {
 
         Ok(trees)
     }
+
+    /// Find trees by their assigned name.
+    ///
+    /// Searches through all trees in the database and returns those whose "name"
+    /// setting matches the provided name.
+    ///
+    /// # Arguments
+    /// * `name` - The name to search for.
+    ///
+    /// # Returns
+    /// A `Result` containing a vector of `Tree` instances whose name matches,
+    /// or an error.
+    ///
+    /// # Errors
+    /// Returns `Error::NotFound` if no trees with the specified name are found.
+    pub fn find_tree(&self, name: &str) -> Result<Vec<Tree>> {
+        let all_trees = self.all_trees()?;
+        let mut matching_trees = Vec::new();
+
+        for tree in all_trees {
+            // Attempt to get the name from the tree's settings
+            if let Ok(tree_name) = tree.get_name() {
+                if tree_name == name {
+                    matching_trees.push(tree);
+                }
+            }
+            // Ignore trees where getting the name fails or doesn't match
+        }
+
+        if matching_trees.is_empty() {
+            Err(Error::NotFound)
+        } else {
+            Ok(matching_trees)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -157,6 +192,52 @@ mod tests {
         let found_ids: Vec<String> = trees.iter().map(|t| t.root_id().clone()).collect();
         assert!(found_ids.contains(&root_id1));
         assert!(found_ids.contains(&root_id2));
+    }
+
+    #[test]
+    fn test_find_tree() {
+        let backend = Box::new(InMemoryBackend::new());
+        let db = BaseDB::new(backend);
+
+        // Tree 1: No name
+        let settings1 = KVOverWrite::new();
+        db.new_tree(settings1).expect("Failed to create tree 1");
+
+        // Tree 2: Name "Tree2"
+        let mut settings2 = KVOverWrite::new();
+        settings2.set("name".to_string(), "Tree2".to_string());
+        db.new_tree(settings2).expect("Failed to create tree 2");
+
+        // Tree 3: Name "Tree3"
+        let mut settings3 = KVOverWrite::new();
+        settings3.set("name".to_string(), "Tree3".to_string());
+        db.new_tree(settings3).expect("Failed to create tree 3");
+
+        // Tree 4: Name "Tree3" (duplicate name)
+        let mut settings4 = KVOverWrite::new();
+        settings4.set("name".to_string(), "Tree3".to_string());
+        db.new_tree(settings4).expect("Failed to create tree 4");
+
+        // Test: Find non-existent name
+        let found_none_result = db.find_tree("NonExistent");
+        assert!(matches!(found_none_result, Err(Error::NotFound)));
+
+        // Test: Find unique name
+        let found_tree2 = db.find_tree("Tree2").expect("find_tree failed");
+        assert_eq!(found_tree2.len(), 1);
+        assert_eq!(found_tree2[0].get_name().unwrap(), "Tree2");
+
+        // Test: Find duplicate name
+        let found_tree3 = db.find_tree("Tree3").expect("find_tree failed");
+        assert_eq!(found_tree3.len(), 2);
+        // Check if both found trees have the name "Tree3"
+        assert!(found_tree3.iter().all(|t| t.get_name().unwrap() == "Tree3"));
+
+        // Test: Find when no trees exist
+        let empty_backend = Box::new(InMemoryBackend::new());
+        let empty_db = BaseDB::new(empty_backend);
+        let found_empty_result = empty_db.find_tree("AnyName");
+        assert!(matches!(found_empty_result, Err(Error::NotFound)));
     }
 
     #[test]

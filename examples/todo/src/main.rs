@@ -118,31 +118,30 @@ fn save_db(db: &BaseDB, path: &PathBuf) -> Result<()> {
 }
 
 fn load_or_create_todo_tree(db: &BaseDB) -> Result<Tree> {
-    let tree_name = "todo";
+    let tree_name = "todo".to_string();
 
-    // Try to find the tree by name among all trees
-    // This will be easier eventually
-    let all_trees = db.all_trees()?;
-    for tree in all_trees {
-        if let Ok(name) = tree.get_name() {
-            if name == tree_name {
-                return Ok(tree);
-            }
+    // Try to find the tree by name
+    match db.find_tree(&tree_name) {
+        Ok(mut trees) => {
+            // If multiple trees with the same name exist, pop will return one arbitrarily.
+            // We might want more robust handling later (e.g., error or config option).
+            Ok(trees.pop().unwrap()) // unwrap is safe because find_tree errors if empty
+        }
+        Err(Error::NotFound) => {
+            // If not found, create a new one
+            println!("No existing todo tree found, creating a new one...");
+            let mut settings = eideticadb::data::KVOverWrite::new();
+            settings.set("name".to_string(), tree_name.clone());
+
+            let tree = db.new_tree(settings)?;
+
+            Ok(tree)
+        }
+        Err(e) => {
+            // Propagate other errors
+            Err(e.into())
         }
     }
-
-    // If not found, create a new one
-    let mut settings = eideticadb::data::KVOverWrite::new();
-    settings.set("name".to_string(), tree_name.to_string());
-
-    let tree = db.new_tree(settings)?;
-
-    // Create an initial empty todos subtree
-    let op = tree.new_operation()?;
-    // We don't need to add any data here as the subtree will be created when needed
-    op.commit()?;
-
-    Ok(tree)
 }
 
 fn add_todo(tree: &Tree, title: String) -> Result<()> {
