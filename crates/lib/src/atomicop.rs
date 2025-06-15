@@ -286,17 +286,43 @@ impl AtomicOp {
             return Ok(T::default());
         }
 
-        // Get the entries from the backend up to these parent pointers
-        let backend_guard = self.tree.lock_backend()?;
-        let entries =
-            backend_guard.get_subtree_from_tips(self.tree.root_id(), subtree_name, &parents)?;
+        // Check if we're using InMemoryBackend for potential caching optimization
+        {
+            let backend_guard = self.tree.lock_backend()?;
+            let is_in_memory_backend = backend_guard.as_any().downcast_ref::<crate::backend::InMemoryBackend>().is_some();
+            
+            if is_in_memory_backend {
+                // Check cache first
+                if let Some(in_memory_backend) = backend_guard.as_any().downcast_ref::<crate::backend::InMemoryBackend>() {
+                    if let Some(cached_state) = in_memory_backend.get_cached_state(self.tree.root_id(), subtree_name, &parents) {
+                        let result: T = serde_json::from_str(cached_state)?;
+                        return Ok(result);
+                    }
+                }
+            }
+        } // Release the lock before computing
 
+        // Compute the CRDT state (works for all backend types)
+        let entries = {
+            let backend_guard = self.tree.lock_backend()?;
+            backend_guard.get_subtree_from_tips(self.tree.root_id(), subtree_name, &parents)?
+        };
+        
         // Merge all the entries
         let mut result = T::default();
         for entry in entries {
             if let Ok(data) = entry.data(subtree_name) {
                 let parsed: T = serde_json::from_str(data)?;
                 result = result.merge(&parsed)?;
+            }
+        }
+
+        // Cache the result if using InMemoryBackend
+        {
+            let mut backend_guard = self.tree.lock_backend()?;
+            if let Some(in_memory_backend_mut) = backend_guard.as_any_mut().downcast_mut::<crate::backend::InMemoryBackend>() {
+                let serialized_result = serde_json::to_string(&result)?;
+                in_memory_backend_mut.cache_state(self.tree.root_id(), subtree_name, &parents, serialized_result);
             }
         }
 

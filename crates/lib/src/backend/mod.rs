@@ -159,6 +159,12 @@ pub trait Backend: Send + Sync + Any {
     /// enabling access to implementation-specific methods. Use with caution.
     fn as_any(&self) -> &dyn Any;
 
+    /// Returns a mutable reference to the backend instance as a dynamic `Any` type.
+    ///
+    /// This allows for downcasting to a concrete backend implementation if necessary,
+    /// enabling access to implementation-specific mutable methods. Use with caution.
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+
     /// Retrieves all entries belonging to a specific tree, sorted topologically.
     ///
     /// The entries are sorted primarily by their height (distance from the root)
@@ -268,4 +274,5 @@ pub trait Backend: Send + Sync + Any {
     /// # Returns
     /// A `Result` indicating success or an error. Succeeds even if the key doesn't exist.
     fn remove_private_key(&mut self, key_id: &str) -> Result<()>;
+
 }

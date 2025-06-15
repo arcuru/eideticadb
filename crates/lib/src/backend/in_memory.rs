@@ -5,7 +5,9 @@ use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::any::Any;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::hash_map::DefaultHasher;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::Path;
 
 /// A simple in-memory backend implementation using a `HashMap` for storage.
@@ -31,6 +33,10 @@ pub struct InMemoryBackend {
     /// This is suitable for development/testing only. Production systems should use
     /// proper key management with encryption at rest.
     private_keys: HashMap<String, SigningKey>,
+    /// CRDT state cache for subtrees
+    /// Key: (tree_id, subtree_name, sorted_tip_ids_hash)
+    /// Value: serialized CRDT state (JSON string)
+    crdt_cache: HashMap<(ID, String, u64), String>,
 }
 
 /// Serializable version of InMemoryBackend for persistence
@@ -40,6 +46,9 @@ struct SerializableBackend {
     verification_status: HashMap<ID, VerificationStatus>,
     /// Private keys stored as 32-byte arrays for serialization
     private_keys_bytes: HashMap<String, [u8; 32]>,
+    /// CRDT state cache for subtrees (not serialized - cache is rebuilt on load)
+    #[serde(default)]
+    crdt_cache: HashMap<(ID, String, u64), String>,
 }
 
 impl Serialize for InMemoryBackend {
@@ -57,6 +66,7 @@ impl Serialize for InMemoryBackend {
             entries: self.entries.clone(),
             verification_status: self.verification_status.clone(),
             private_keys_bytes,
+            crdt_cache: self.crdt_cache.clone(),
         };
 
         serializable.serialize(serializer)
@@ -83,6 +93,7 @@ impl<'de> Deserialize<'de> for InMemoryBackend {
             entries: serializable.entries,
             verification_status: serializable.verification_status,
             private_keys,
+            crdt_cache: serializable.crdt_cache,
         })
     }
 }
@@ -100,6 +111,7 @@ impl InMemoryBackend {
             entries: HashMap::new(),
             verification_status: HashMap::new(),
             private_keys: HashMap::new(),
+            crdt_cache: HashMap::new(),
         }
     }
 
@@ -342,6 +354,53 @@ impl InMemoryBackend {
         Ok(heights)
     }
 
+    /// Creates a cache key from tree, subtree, and tip IDs by hashing the sorted tips.
+    fn create_cache_key(&self, tree: &ID, subtree: &str, tips: &[ID]) -> (ID, String, u64) {
+        // Sort tips for consistent hashing
+        let mut sorted_tips = tips.to_vec();
+        sorted_tips.sort();
+        
+        // Hash the sorted tips
+        let mut hasher = DefaultHasher::new();
+        sorted_tips.hash(&mut hasher);
+        let tips_hash = hasher.finish();
+        
+        (tree.clone(), subtree.to_string(), tips_hash)
+    }
+
+    /// Gets cached CRDT state if available.
+    pub fn get_cached_state(&self, tree: &ID, subtree: &str, tips: &[ID]) -> Option<&String> {
+        let key = self.create_cache_key(tree, subtree, tips);
+        self.crdt_cache.get(&key)
+    }
+
+    /// Caches a CRDT state for the given tree, subtree, and tips.
+    pub fn cache_state(&mut self, tree: &ID, subtree: &str, tips: &[ID], state: String) {
+        let key = self.create_cache_key(tree, subtree, tips);
+        self.crdt_cache.insert(key, state);
+    }
+
+    /// Gets or computes cached CRDT state for a subtree.
+    /// This method provides a cache for external CRDT state computation.
+    pub fn get_or_cache_crdt_state<F>(&mut self, tree: &ID, subtree: &str, tips: &[ID], compute_fn: F) -> Result<String>
+    where
+        F: FnOnce() -> Result<String>,
+    {
+        // Check cache first
+        if let Some(cached_state) = self.get_cached_state(tree, subtree, tips) {
+            return Ok(cached_state.clone());
+        }
+
+        // Compute the state using the provided function
+        let computed_state = compute_fn()?;
+
+        // Cache the result
+        self.cache_state(tree, subtree, tips, computed_state.clone());
+
+        Ok(computed_state)
+    }
+
+
     /// Sorts entries by their height (longest path from a root) within a tree.
     ///
     /// Entries with lower height (closer to a root) appear before entries with higher height.
@@ -508,6 +567,11 @@ impl Backend for InMemoryBackend {
 
     /// Returns `self` as a `&dyn Any` reference.
     fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    /// Returns `self` as a `&mut dyn Any` reference.
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 
@@ -708,4 +772,5 @@ impl Backend for InMemoryBackend {
         self.private_keys.remove(key_id);
         Ok(())
     }
+
 }

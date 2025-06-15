@@ -18,6 +18,7 @@ mod atomicop;
 mod auth_integration;
 mod backend;
 mod basedb;
+mod cache;
 mod data;
 mod entry;
 mod helpers;
